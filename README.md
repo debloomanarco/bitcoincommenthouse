@@ -1,4 +1,4 @@
-Bitcoin Core integration/staging tree
+Bitcoin Core Comment House
 =====================================
 
 https://bitcoincore.org
@@ -6,12 +6,11 @@ https://bitcoincore.org
 For an immediately usable, binary version of the Bitcoin Core software, see
 https://bitcoincore.org/en/download/.
 
-What is Bitcoin Core?
+What is Bitcoin Comment House?
 ---------------------
 
-Bitcoin Core connects to the Bitcoin peer-to-peer network to download and fully
-validate blocks and transactions. It also includes a wallet and graphical user
-interface, which can be optionally built.
+Bitcoin Comment House is an educational project that adds comments to Core so that highschoolers can understand since comments on the main repo are discourage because of clutter. the Bitcoin peer-to-peer network to download and fully
+validate blocks and transactions. 
 
 Further information about Bitcoin Core is available in the [doc folder](/doc).
 
