@@ -3,6 +3,17 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// This file BUILDS a new block, ready to be mined. It is where Phases 3
+// and 4 meet: it picks valid transactions from the mempool, creates the
+// coinbase transaction that pays the miner, and fills in the header.
+// The result is a "block template": a complete block except for a
+// winning nonce. Bitcoin Core does not search for the nonce itself. Mining
+// hardware (special chips called ASICs) takes the template and does the
+// billions of hashes per second needed to meet the target (see pow.cpp).
+//
+// Start with BlockAssembler::CreateNewBlock(), which does the whole job
+// from top to bottom. addChunks() is how transactions are chosen.
 #include <node/miner.h>
 
 #include <chain.h>
@@ -47,6 +58,12 @@
 
 namespace node {
 
+// COMMENT HOUSE: GetMinimumTime(): the earliest timestamp the new block is
+// allowed to have. Consensus requires it to be later than the "median
+// time past" (the middle time of the previous 11 blocks). The extra rules
+// (BIP 94 and BIP 54) stop miners from playing tricks with timestamps around
+// difficulty adjustments to make mining artificially easy (a "timewarp
+// attack").
 int64_t GetMinimumTime(const CBlockIndex* pindexPrev, const int64_t difficulty_adjustment_interval)
 {
     int64_t min_time{pindexPrev->GetMedianTimePast() + 1};
@@ -67,6 +84,8 @@ int64_t GetMinimumTime(const CBlockIndex* pindexPrev, const int64_t difficulty_a
     return min_time;
 }
 
+// COMMENT HOUSE: UpdateTime() sets the block's time to now, but never earlier
+// than the minimum allowed above.
 int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParams, const CBlockIndex* pindexPrev)
 {
     int64_t nOldTime = pblock->nTime;
@@ -85,6 +104,10 @@ int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParam
     return nNewTime - nOldTime;
 }
 
+// COMMENT HOUSE: If the block's transactions change, the SegWit fingerprint
+// in the coinbase (see GetWitnessCommitmentIndex() in consensus/validation.h)
+// and the merkle root (consensus/merkle.cpp) must be recalculated. This
+// function does both.
 void RegenerateCommitments(CBlock& block, ChainstateManager& chainman)
 {
     CMutableTransaction tx{*block.vtx.at(0)};
@@ -123,6 +146,15 @@ void BlockAssembler::resetBlock()
     nFees = 0;
 }
 
+// COMMENT HOUSE: CreateNewBlock(), building a block template, step by step:
+//   1. Leave a space at the start for the coinbase transaction.
+//   2. Pick the version (nVersion, which may signal upgrades, see
+//      BIP9Deployment in consensus/params.h) and the time.
+//   3. Fill the block with mempool transactions (addChunks()).
+//   4. Build the coinbase transaction, which pays reward + fees.
+//   5. Fill in the rest of the header: previous block hash, time, nBits.
+//   6. Optionally test the whole block with the same validation rules every
+//      node will use (TestBlockValidity()), but without proof-of-work.
 std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
 {
     const auto time_start{SteadyClock::now()};
@@ -134,6 +166,9 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
 
     // Add dummy coinbase tx as first transaction. It is skipped by the
     // getblocktemplate RPC and mining interface consumers must not use it.
+    // COMMENT HOUSE: Step 1: a placeholder for the coinbase. It must be the first
+    // transaction (CheckBlock() in validation.cpp requires that), but it can only
+    // be built once the total fees are known, after step 3.
     pblock->vtx.emplace_back();
 
     LOCK(::cs_main);
@@ -141,6 +176,8 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     assert(pindexPrev != nullptr);
     nHeight = pindexPrev->nHeight + 1;
 
+    // COMMENT HOUSE: Step 2: the new block's height is one more than the current
+    // tip of the chain (pindexPrev). The version may signal support for upgrades.
     pblock->nVersion = m_chainstate.m_chainman.m_versionbitscache.ComputeBlockVersion(pindexPrev, chainparams.GetConsensus());
     // -regtest only: allow overriding block.nVersion with
     // -blockversion=N to test forking scenarios
@@ -151,6 +188,8 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     pblock->nTime = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
     m_lock_time_cutoff = pindexPrev->GetMedianTimePast();
 
+    // COMMENT HOUSE: Step 3: choose transactions from the mempool (see
+    // addChunks() below).
     if (m_mempool) {
         LOCK(m_mempool->cs);
         m_mempool->StartBlockBuilding();
@@ -164,6 +203,8 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     m_last_block_weight = nBlockWeight;
 
     // Create coinbase transaction.
+    // COMMENT HOUSE: Step 4: build the coinbase transaction. Its single input has
+    // a "null" prevout, because it spends nothing and creates new coins.
     CMutableTransaction coinbaseTx;
 
     // Construct coinbase transaction struct in parallel
@@ -179,6 +220,9 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     coinbaseTx.vout.resize(1);
     coinbaseTx.vout[0].scriptPubKey = m_options.coinbase_output_script;
     // Block subsidy + fees
+    // COMMENT HOUSE: The miner's pay: all the fees from the chosen transactions
+    // plus the new coins allowed by GetBlockSubsidy() (validation.cpp). This is
+    // exactly the limit ConnectBlock() checks ("bad-cb-amount").
     const CAmount block_reward{nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus())};
     coinbaseTx.vout[0].nValue = block_reward;
     coinbase_tx.block_reward_remaining = block_reward;
@@ -187,6 +231,9 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     // Mining clients are expected to append extra data to this prefix, so
     // increasing its length would reduce the space they can use and may break
     // existing clients.
+    // COMMENT HOUSE: BIP 34 requires the coinbase to begin with the block height.
+    // That makes every coinbase transaction different, so two can never have the
+    // same txid again.
     coinbaseTx.vin[0].scriptSig = CScript() << nHeight;
     // Set script_sig_prefix here, so IPC mining clients are not affected by
     // the optional scriptSig padding below. They provide their own extraNonce,
@@ -205,6 +252,8 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     coinbase_tx.lock_time = coinbaseTx.nLockTime;
 
     pblock->vtx[0] = MakeTransactionRef(std::move(coinbaseTx));
+    // COMMENT HOUSE: Add the SegWit fingerprint (witness commitment) to the
+    // coinbase as an extra output.
     m_chainstate.m_chainman.GenerateCoinbaseCommitment(*pblock, pindexPrev);
 
     const CTransactionRef& final_coinbase{pblock->vtx[0]};
@@ -223,6 +272,10 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     LogDebug(BCLog::MINING, "CreateNewBlock(): block weight: %u txs: %u fees: %ld sigops %d\n", GetBlockWeight(*pblock), nBlockTx, nFees, nBlockSigOpsCost);
 
     // Fill in header
+    // COMMENT HOUSE: Step 5: link to the previous block, set the time, and set the
+    // difficulty for this height (GetNextWorkRequired() in pow.cpp). The nonce
+    // starts at 0, and the miner will change it. The merkle root is filled in
+    // later, once the final coinbase is known (see AddMerkleRootAndCoinbase()).
     pblock->hashPrevBlock  = pindexPrev->GetBlockHash();
     UpdateTime(pblock, chainparams.GetConsensus(), pindexPrev);
     pblock->nBits          = GetNextWorkRequired(pindexPrev, pblock, chainparams.GetConsensus());
@@ -243,6 +296,9 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     return std::move(pblocktemplate);
 }
 
+// COMMENT HOUSE: Would adding this group of transactions make the block too
+// heavy (see weight in consensus/validation.h) or give it too many signature
+// operations?
 bool BlockAssembler::TestChunkBlockLimits(int64_t chunk_weight, int64_t chunk_sigops_cost) const
 {
     // block_max_weight has been flattened before block assembly limit checks.
@@ -258,6 +314,8 @@ bool BlockAssembler::TestChunkBlockLimits(int64_t chunk_weight, int64_t chunk_si
 
 // Perform transaction-level checks before adding to block:
 // - transaction finality (locktime)
+// COMMENT HOUSE: Are all these transactions free of time locks for this block
+// (IsFinalTx() in consensus/tx_verify.cpp)?
 bool BlockAssembler::TestChunkTransactions(const std::vector<CTxMemPoolEntryRef>& txs) const
 {
     for (const auto tx : txs) {
@@ -268,6 +326,8 @@ bool BlockAssembler::TestChunkTransactions(const std::vector<CTxMemPoolEntryRef>
     return true;
 }
 
+// COMMENT HOUSE: Adds one transaction to the block and updates the running
+// totals: weight, number of transactions, signature operations and fees.
 void BlockAssembler::AddToBlock(const CTxMemPoolEntry& entry)
 {
     pblocktemplate->block.vtx.emplace_back(entry.GetSharedTx());
@@ -285,6 +345,19 @@ void BlockAssembler::AddToBlock(const CTxMemPoolEntry& entry)
     }
 }
 
+// COMMENT HOUSE: addChunks(), choosing which transactions go in.
+// Block space is limited, so miners want the transactions that pay the most
+// fee per unit of space (the "fee rate"), not just the biggest fees. The
+// mempool hands over transactions in "chunks", best fee rate first. A chunk
+// is a group that must go in together. For example, if transaction B spends
+// an output of transaction A, B cannot be included without A.
+// For each chunk:
+//   - if its fee rate is below the minimum, stop: all remaining ones are
+//     worse;
+//   - if it does not fit, skip it and try the next one;
+//   - otherwise add it to the block.
+// If the block is nearly full and many chunks in a row have not fit, it gives
+// up to save time.
 void BlockAssembler::addChunks()
 {
     // Limit the number of attempts to add transactions to the block when it is
@@ -346,6 +419,10 @@ void BlockAssembler::addChunks()
     }
 }
 
+// COMMENT HOUSE: Used when a miner sends back a finished block: put in the
+// final coinbase, version, time and nonce, then calculate the merkle root. The
+// "already checked" flags are reset, because the block has changed and must
+// be checked again.
 void AddMerkleRootAndCoinbase(CBlock& block, CTransactionRef coinbase, uint32_t version, uint32_t timestamp, uint32_t nonce)
 {
     if (block.vtx.size() == 0) {
