@@ -262,6 +262,22 @@ bool XOnlyPubKey::VerifySchnorr(const uint256& msg, std::span<const unsigned cha
 // are explained in Phase 8.
 static const HashWriter HASHER_TAPTWEAK{TaggedHash("TapTweak")};
 
+// COMMENT HOUSE: TAPROOT TWEAKING (Phase 8).
+// A Taproot output can be spent in two ways:
+//   - the "key path": one simple signature from a key, or
+//   - the "script path": by meeting one of several hidden scripts (for
+//     example "Alice and Bob together, OR Carol after one year").
+// Both are hidden inside ONE 32-byte public key. Starting from an "internal"
+// key P and the merkle root of a tree of scripts (like consensus/merkle.cpp,
+// but of scripts), the output key is
+//     Q = P + t x G,  where t = TaggedHash("TapTweak", P, merkle root)
+// and G is the curve's fixed starting point. Adding t x G to a public key
+// matches adding t to the private key, so the owner of P can still sign for
+// Q directly (the key path). Nobody can find another script tree that gives
+// the same Q. On the blockchain, a key-path spend looks just like any other
+// single-key payment, so the hidden scripts stay private.
+// This function works out t. If there are no scripts (merkle_root is
+// nullptr), only P is hashed.
 uint256 XOnlyPubKey::ComputeTapTweakHash(const uint256* merkle_root) const
 {
     if (merkle_root == nullptr) {
@@ -273,6 +289,11 @@ uint256 XOnlyPubKey::ComputeTapTweakHash(const uint256* merkle_root) const
     }
 }
 
+// COMMENT HOUSE: CheckTapTweak(): used when spending by the SCRIPT path. Given
+// the internal key P and the merkle root the spender revealed, is this key
+// really Q = P + t x G? If so, the script really was hidden inside this
+// output from the start. "parity" says whether Q's y value is even or odd,
+// since only x is stored (see XOnlyPubKey in pubkey.h).
 bool XOnlyPubKey::CheckTapTweak(const XOnlyPubKey& internal, const uint256& merkle_root, bool parity) const
 {
     secp256k1_xonly_pubkey internal_key;
@@ -281,6 +302,8 @@ bool XOnlyPubKey::CheckTapTweak(const XOnlyPubKey& internal, const uint256& merk
     return secp256k1_xonly_pubkey_tweak_add_check(secp256k1_context_static, m_keydata.begin(), parity, &internal_key, tweak.begin());
 }
 
+// COMMENT HOUSE: CreateTapTweak(): the wallet's side. It works out the output
+// key Q (and its parity) from this internal key and a merkle root.
 std::optional<std::pair<XOnlyPubKey, bool>> XOnlyPubKey::CreateTapTweak(const uint256* merkle_root) const
 {
     secp256k1_xonly_pubkey base_point;
