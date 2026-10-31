@@ -3,6 +3,14 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// It announces the block-building code in node/miner.cpp. Read that file
+// for the full step-by-step explanation of how a new block is put
+// together. The two main pieces are CBlockTemplate (the result) and
+// BlockAssembler (the builder).
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_NODE_MINER_H
 #define BITCOIN_NODE_MINER_H
 
@@ -29,6 +37,10 @@ struct Params;
 } // namespace Consensus
 namespace node {
 
+// COMMENT HOUSE: CBlockTemplate, a block ready to be mined. It has everything
+// except a winning nonce, plus extra information for mining software: the
+// fee and signature-operation cost of each transaction, the fee rate of each
+// chunk chosen, and the coinbase details.
 struct CBlockTemplate
 {
     CBlock block;
@@ -47,6 +59,10 @@ struct CBlockTemplate
 };
 
 /** Generate a new block, without valid proof-of-work */
+// COMMENT HOUSE: BlockAssembler, the builder. While it works, it keeps running
+// totals (weight, number of transactions, signature operations, fees), so it
+// knows when the block is full. CreateNewBlock() does the whole job, and the
+// private helper functions are the steps it uses (see node/miner.cpp).
 class BlockAssembler
 {
 private:
@@ -110,6 +126,9 @@ private:
  * accounts for the BIP94 timewarp rule, so does not necessarily reflect the
  * consensus limit.
  */
+// COMMENT HOUSE: Helpers used while building and finishing a block: the
+// earliest allowed timestamp, setting the time, and updating the witness
+// commitment and merkle root after the transactions or coinbase change.
 int64_t GetMinimumTime(const CBlockIndex* pindexPrev, int64_t difficulty_adjustment_interval);
 
 int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParams, const CBlockIndex* pindexPrev);
