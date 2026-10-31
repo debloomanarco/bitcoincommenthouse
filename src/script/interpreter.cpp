@@ -1925,6 +1925,12 @@ bool GenericTransactionSignatureChecker<T>::CheckSequence(const CScriptNum& nSeq
 template class GenericTransactionSignatureChecker<CTransaction>;
 template class GenericTransactionSignatureChecker<CMutableTransaction>;
 
+// COMMENT HOUSE: ExecuteWitnessScript() (Phase 7) runs a script for a SegWit
+// or Taproot spend. The witness items become the starting stack, then
+// exec_script is run with EvalScript(). Unlike old scripts, it must finish
+// with EXACTLY one item left, and that item must be true. That makes the
+// witness harder to tamper with. The Tapscript part at the top (OP_SUCCESS)
+// belongs to Phase 8.
 static bool ExecuteWitnessScript(const std::span<const valtype>& stack_span, const CScript& exec_script, script_verify_flags flags, SigVersion sigversion, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, ScriptError* serror)
 {
     std::vector<valtype> stack{stack_span.begin(), stack_span.end()};
@@ -2010,6 +2016,15 @@ static bool VerifyTaprootCommitment(const std::vector<unsigned char>& control, c
     return q.CheckTapTweak(p, merkle_root, control[0] & 1);
 }
 
+// COMMENT HOUSE: VerifyWitnessProgram() (Phase 7), spending a SegWit output.
+// A SegWit locking script is just a version number plus a "program" (see
+// Solver() in script/solver.cpp). The rules depend on the version:
+//   - version 0, 32 bytes: P2WSH. The program is the SHA-256 of a script.
+//   - version 0, 20 bytes: P2WPKH. The program is the Hash160 of a key.
+//   - version 1, 32 bytes: Taproot (Phase 8).
+//   - any other version: no rules yet. Anyone can spend it, so that future
+//     soft forks can define new versions. Policy refuses to relay these
+//     spends, to keep them safe until then.
 static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, const std::vector<unsigned char>& program, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror, bool is_p2sh)
 {
     CScript exec_script; //!< Actually executed script (last stack item in P2WSH; implied P2PKH script in P2WPKH; leaf script in P2TR)
@@ -2017,6 +2032,9 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
     ScriptExecutionData execdata;
 
     if (witversion == 0) {
+        // COMMENT HOUSE: P2WSH, the SegWit version of P2SH. The last witness item is
+        // the real script. Its SHA-256 must equal the program, and then it is run
+        // with the other witness items as its stack.
         if (program.size() == WITNESS_V0_SCRIPTHASH_SIZE) {
             // BIP141 P2WSH: 32-byte witness v0 program (which encodes SHA256(script))
             if (stack.size() == 0) {
@@ -2035,6 +2053,11 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
             if (stack.size() != 2) {
                 return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_MISMATCH); // 2 items in witness
             }
+            // COMMENT HOUSE: P2WPKH, the SegWit version of P2PKH. The witness must be
+            // exactly two items: <signature> <public key>. The code builds the classic
+            // P2PKH lock from the 20-byte program and runs it, exactly like the example
+            // in script/script.h. The only difference is that the signature lives in the
+            // witness, not the scriptSig.
             exec_script << OP_DUP << OP_HASH160 << program << OP_EQUALVERIFY << OP_CHECKSIG;
             return ExecuteWitnessScript(stack, exec_script, flags, SigVersion::WITNESS_V0, checker, execdata, serror);
         } else {
