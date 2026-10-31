@@ -71,7 +71,7 @@ Phase 2: What a transaction and a block are
 - Why: ComputeMerkleRoot() (line 46) shows how thousands of transactions are squeezed into one 32-byte fingerprint in the header. The existing developer comment about CVE-2012-2459 (line 12) is a real-world security story beginners can follow.
 
 7. kernel/chainparams.cpp and consensus/params.h
-- Why: CreateGenesisBlock() (line 36) builds the very first block. It contains Satoshi's headline, "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks" (line 70). params.h defines the protocol's settings: nSubsidyHalvingInterval, nPowTargetSpacing, SegwitHeight and DEPLOYMENT_TAPROOT. These settings come back in every later phase.
+- Why: CreateGenesisBlock() (line 36) builds the very first block. It contains Satoshi's headline, "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks" (line 70). params.h defines the protocol's settings: nSubsidyHalvingInterval, nPowTargetSpacing, SegwitHeight and the BIP 9 upgrade-voting settings (vDeployments). These settings come back in every later phase.
 
 Phase 3: Transaction validation
 
