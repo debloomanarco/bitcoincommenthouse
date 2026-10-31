@@ -4069,6 +4069,20 @@ static bool CheckMerkleRoot(const CBlock& block, BlockValidationState& state)
  * Note: If the witness commitment is expected (i.e. `expect_witness_commitment
  * = true`), then the block is required to have at least one transaction and the
  * first transaction needs to have at least one input. */
+// COMMENT HOUSE: CheckWitnessMalleation() (Phase 7) checks that a block's
+// witness data really belongs to it. The header's merkle root only covers
+// txids, which do not include witnesses. So since SegWit, the coinbase
+// carries a second fingerprint, the "witness commitment" (see
+// GetWitnessCommitmentIndex() in consensus/validation.h):
+//     double SHA-256( witness merkle root + witness reserved value )
+//   - The witness merkle root is BlockWitnessMerkleRoot() from
+//     consensus/merkle.cpp.
+//   - The "reserved value" is 32 bytes stored in the coinbase's own witness,
+//     kept free for future upgrades.
+// This function recalculates it and compares it with the bytes after the
+// 6-byte marker in the coinbase output. If they differ, someone has changed
+// the witness data, and the block is rejected as BLOCK_MUTATED.
+// Blocks WITHOUT a commitment may not contain any witness data at all.
 static bool CheckWitnessMalleation(const CBlock& block, bool expect_witness_commitment, BlockValidationState& state)
 {
     if (expect_witness_commitment) {
@@ -4208,6 +4222,11 @@ void ChainstateManager::UpdateUncommittedBlockStructures(CBlock& block, const CB
     }
 }
 
+// COMMENT HOUSE: GenerateCoinbaseCommitment() (Phase 7) is the miner's side
+// of the check above (it is called from node/miner.cpp). It calculates the
+// witness commitment, using 32 zero bytes as the reserved value, and adds it
+// to the coinbase as a new output worth 0 coins: OP_RETURN, then the marker
+// bytes 0x24 0xaa 0x21 0xa9 0xed, then the 32-byte commitment.
 void ChainstateManager::GenerateCoinbaseCommitment(CBlock& block, const CBlockIndex* pindexPrev) const
 {
     int commitpos = GetWitnessCommitmentIndex(block);
