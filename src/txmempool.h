@@ -3,6 +3,25 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The MEMPOOL ("memory pool"): the waiting room for valid transactions that
+// are not in a block yet. Every node keeps its own. When you send bitcoin,
+// your transaction spreads from mempool to mempool across the network, and
+// miners pick the best-paying ones to put in their next block (see
+// node/miner.cpp). Once a transaction is in a block, it leaves the waiting
+// room.
+// To get in, a transaction must pass AcceptToMemoryPool() (validation.cpp):
+// the consensus checks plus this node's policy (policy/policy.cpp).
+// The mempool is memory, not disk, so it is limited (300 MB by default). If
+// it gets full, the lowest fee-rate transactions are pushed out first, and
+// transactions still waiting after two weeks are dropped.
+// This is a big file. The class to focus on is CTxMemPool, especially its
+// long developer comment. Much of the clever ordering work happens in
+// TxGraph (txgraph.h), which tracks how waiting transactions depend on
+// each other.
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_TXMEMPOOL_H
 #define BITCOIN_TXMEMPOOL_H
 
@@ -48,10 +67,15 @@ class ValidationSignals;
 struct bilingual_str;
 
 /** Fake height value used in Coin to signify they are only in the memory pool (since 0.8) */
+// COMMENT HOUSE: A coin created by a transaction that is still in the mempool
+// has no block height yet, so this huge "fake" height is used for it.
 inline constexpr uint32_t MEMPOOL_HEIGHT = 0x7FFFFFFF;
 
 /** How much linearization cost required for TxGraph clusters to have
  * "acceptable" quality, if they cannot be optimally linearized with less cost. */
+// COMMENT HOUSE: Limits on how much work is spent finding the best ORDER of
+// related transactions (their "linearization", for TxGraph). You can skip
+// these.
 inline constexpr uint64_t ACCEPTABLE_COST = 75'000;
 
 /** How much work we ask TxGraph to do after a mempool change occurs (either
@@ -109,6 +133,9 @@ struct index_by_wtxid {};
 /**
  * Information about a mempool transaction.
  */
+// COMMENT HOUSE: A short summary of one waiting transaction: the transaction,
+// when it arrived, its fee and its virtual size. It is handed to other parts
+// of the program that ask about the mempool.
 struct TxMempoolInfo
 {
     /** The transaction itself */
@@ -184,6 +211,17 @@ struct TxMempoolInfo
  * confirmed in a block.
  *
  */
+// COMMENT HOUSE: CTxMemPool, the mempool itself.
+// The developer comment above explains it well. In short:
+//   - Not every transaction gets in: it must pay the minimum fee, be
+//     standard, and not double-spend a waiting transaction unless it follows
+//     the replace-by-fee rules (policy/rbf.cpp).
+//   - Waiting transactions can depend on each other. If B spends an output
+//     of A, and A is not in a block yet, B cannot go in a block before A.
+//     Groups of related transactions are called "clusters".
+//   - mapTx stores every entry and can find it by txid, by wtxid or by
+//     arrival time. mapNextTx records which waiting transaction spends each
+//     coin, so conflicts are found quickly.
 class CTxMemPool
 {
 protected:
@@ -195,6 +233,9 @@ protected:
 
     mutable int64_t lastRollingFeeUpdate GUARDED_BY(cs){GetTime()};
     mutable bool blockSinceLastRollingFeeBump GUARDED_BY(cs){false};
+    // COMMENT HOUSE: When the mempool is full, the minimum fee rate to get in
+    // goes UP (to just above what was pushed out). Over time it slowly decays
+    // back down, like a price that drops when demand falls.
     mutable double rollingMinimumFeeRate GUARDED_BY(cs){0}; //!< minimum fee to get into the pool, decreases exponentially
 
     // In-memory counter for external mempool tracking purposes.
@@ -259,6 +300,9 @@ public:
     mutable RecursiveMutex cs ACQUIRED_AFTER(::cs_main);
     std::unique_ptr<TxGraph> m_txgraph GUARDED_BY(cs);
     mutable std::unique_ptr<TxGraph::BlockBuilder> m_builder GUARDED_BY(cs);
+    // COMMENT HOUSE: mapTx: every mempool entry, searchable in several ways at
+    // once (by txid, by wtxid, by arrival time). "cs" is the lock: only one part
+    // of the program may change the mempool at a time.
     indexed_transaction_set mapTx GUARDED_BY(cs);
 
     using txiter = indexed_transaction_set::nth_index<0>::type::const_iterator;
@@ -291,6 +335,9 @@ private:
 
     // Helper to remove all transactions that conflict with a given
     // transaction (used for transactions appearing in a block).
+    // COMMENT HOUSE: removeConflicts(): when a block includes a transaction, any
+    // WAITING transaction that spends the same coin can now never be valid, so
+    // it is removed (with everything that depends on it).
     void removeConflicts(const CTransaction& tx) EXCLUSIVE_LOCKS_REQUIRED(cs);
 
 public:
@@ -321,6 +368,8 @@ public:
      * If the transaction is not already in the mempool, find any descendants
      * and remove them.
      */
+    // COMMENT HOUSE: removeRecursive(): remove a transaction AND all its
+    // descendants, because they would be spending coins that no longer exist.
     void removeRecursive(const CTransaction& tx, MemPoolRemovalReason reason) EXCLUSIVE_LOCKS_REQUIRED(cs);
     /** After reorg, filter the entries that would no longer be valid in the next block, and update
      * the entries' cached LockPoints if needed.  The mempool does not have any knowledge of
@@ -330,6 +379,9 @@ public:
      *                                        and updates an entry's LockPoints.
      * */
     void removeForReorg(CChain& chain, std::function<bool(txiter)> filter_final_and_mature) EXCLUSIVE_LOCKS_REQUIRED(cs, cs_main);
+    // COMMENT HOUSE: removeForBlock(): a new block arrived. Its transactions are
+    // now confirmed, so they leave the waiting room, and conflicting ones are
+    // removed too.
     std::vector<RemovedMempoolTransactionInfo> removeForBlock(const std::vector<CTransactionRef>& vtx) EXCLUSIVE_LOCKS_REQUIRED(cs);
 
     /** Look up wtxids in the mempool and (partially) sort by mining score.
@@ -438,6 +490,9 @@ public:
      *
      * @return all in-mempool ancestors
      */
+    // COMMENT HOUSE: Ancestors and descendants: CalculateMemPoolAncestors() finds
+    // every waiting transaction this one depends on (its parents, their
+    // parents, and so on). CalculateDescendants() goes the other way.
     setEntries CalculateMemPoolAncestors(const CTxMemPoolEntry& entry) const EXCLUSIVE_LOCKS_REQUIRED(cs);
 
     bool HasDescendants(const Txid& txid) const;
@@ -468,9 +523,14 @@ public:
       *  pvNoSpendsRemaining, if set, will be populated with the list of outpoints
       *  which are not in mempool which no longer have any spends in this mempool.
       */
+    // COMMENT HOUSE: TrimToSize(): if the mempool uses too much memory, remove the
+    // worst fee-rate transactions until it fits, and raise the minimum fee
+    // (see rollingMinimumFeeRate above).
     void TrimToSize(size_t sizelimit, std::vector<COutPoint>* pvNoSpendsRemaining = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs);
 
     /** Expire all transaction (and their dependencies) in the mempool older than time. Return the number of removed transactions. */
+    // COMMENT HOUSE: Expire(): remove transactions that have waited too long (two
+    // weeks by default), so forgotten ones do not stay forever.
     int Expire(std::chrono::seconds time) EXCLUSIVE_LOCKS_REQUIRED(cs);
 
     /**
@@ -511,6 +571,8 @@ public:
         return m_total_fee;
     }
 
+    // COMMENT HOUSE: Simple questions: is this transaction in the mempool? Give
+    // me its entry, or the transaction itself.
     bool exists(const Txid& txid) const
     {
         LOCK(cs);
@@ -648,6 +710,11 @@ public:
      * outstanding, no removals or additions may be made directly to the
      * mempool.
      */
+    // COMMENT HOUSE: ChangeSet: a planned change to the mempool, such as "add this
+    // new transaction and remove the ones it replaces". It can be checked
+    // (for example with the RBF feerate diagram in policy/rbf.cpp) before it is
+    // applied, and thrown away if it fails, like a draft you only send once it
+    // is right.
     class ChangeSet {
     public:
         explicit ChangeSet(CTxMemPool* pool) : m_pool(pool) { m_pool->m_txgraph->StartStaging(); }
@@ -749,6 +816,9 @@ private:
     // callbacks).
     void addNewTransaction(CTxMemPool::txiter it) EXCLUSIVE_LOCKS_REQUIRED(cs);
 public:
+    // COMMENT HOUSE: Block building: the miner (addChunks() in node/miner.cpp)
+    // asks for "chunks" of transactions, best fee rate first, and says whether
+    // each one was included or skipped.
     void StartBlockBuilding() const EXCLUSIVE_LOCKS_REQUIRED(cs) { assert(!m_builder); m_builder = m_txgraph->GetBlockBuilder(); }
     FeePerWeight GetBlockBuilderChunk(std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef>& entries) const EXCLUSIVE_LOCKS_REQUIRED(cs)
     {
@@ -781,6 +851,10 @@ public:
  * signrawtransactionwithkey and signrawtransactionwithwallet,
  * as long as the conflicting transaction is not yet confirmed.
  */
+// COMMENT HOUSE: CCoinsViewMemPool: a view of the UTXO set (see coins.h) that
+// also includes coins created by waiting transactions. That lets a new
+// transaction spend an output of a transaction that is still in the
+// mempool.
 class CCoinsViewMemPool : public CCoinsViewBacked
 {
     /**
