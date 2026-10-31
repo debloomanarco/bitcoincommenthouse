@@ -2,6 +2,34 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// This file builds a MERKLE TREE: a way to squeeze a list of thousands of
+// transactions into ONE 32-byte fingerprint, called the merkle root. That
+// root is stored in the block header (hashMerkleRoot, see
+// primitives/block.h), so the small 80-byte header "seals" every transaction
+// in the block.
+//
+// How it works, like a sports tournament bracket:
+//   - Start with the hash (txid) of every transaction. These are the
+//     "leaves" at the bottom of the tree.
+//   - Pair them up: 1 with 2, 3 with 4, and so on. Hash each pair together
+//     to get one new hash per pair. That gives a level half as big.
+//   - Repeat until only one hash is left. That is the root, the "winner".
+//   - Bitcoin's special rule: if a level has an odd number of hashes, the
+//     last one is paired with a copy of itself.
+// If anyone changes even one transaction, its hash changes, which changes
+// every hash above it, all the way up to the root.
+//
+// Why a tree and not one big hash of everything? Because it lets you prove
+// that ONE transaction is in a block by showing only about 12 hashes (one
+// per level), instead of the whole block. This is called a "merkle path"
+// or "merkle proof", and lightweight wallets on phones rely on it.
+//
+// The main functions:
+//   - ComputeMerkleRoot():      the tournament described above.
+//   - BlockMerkleRoot():        the root of a block's transactions (txids).
+//   - BlockWitnessMerkleRoot(): a second root using wtxids, for SegWit.
+//   - TransactionMerklePath():  the proof that one transaction is in a block.
 #include <consensus/merkle.h>
 
 #include <crypto/sha256.h>
@@ -13,6 +41,16 @@
 #include <cstddef>
 #include <utility>
 
+// COMMENT HOUSE: The original developer comment below is a real security
+// story, CVE-2012-2459 ("CVE" is the official ID system for security bugs).
+// In short: because of the "copy the odd one out" rule, two DIFFERENT lists
+// of transactions can produce the SAME merkle root. The tree drawing shows
+// that the list ending in 5,6 and the list ending in 5,6,5,6 both give root
+// A. An attacker could send a node the broken (duplicated) version of a real
+// block. The node would correctly reject it, but if it then remembered that
+// block hash as "bad forever", it would also reject the REAL block, which
+// has the same hash. The fix is to detect the duplicate pattern and treat it
+// as a broken block, without blaming the block hash itself.
 /*     WARNING! If you're reading this because you're learning about crypto
        and/or designing a new system that will use merkle trees, keep in mind
        that the following merkle tree algorithm has a serious flaw related to
@@ -48,8 +86,14 @@
        known ways of changing the transactions without affecting the merkle
        root.
 */
+// COMMENT HOUSE: ComputeMerkleRoot() takes the list of leaf hashes and
+// returns the root. "mutated" is an optional true/false answer to "did this
+// list look like the duplicate trick from CVE-2012-2459?". It is a pointer
+// (the *), so the caller can pass nullptr to say "I don't need that answer".
 uint256 ComputeMerkleRoot(std::vector<uint256> hashes, bool* mutated) {
     bool mutation = false;
+    // COMMENT HOUSE: Each trip around this loop climbs one level of the tree,
+    // until only the root is left.
     while (hashes.size() > 1) {
         if (mutated) {
             // Check every level because equal pairs can appear above the leaves,
@@ -61,18 +105,30 @@ uint256 ComputeMerkleRoot(std::vector<uint256> hashes, bool* mutated) {
                 if (hashes[pos] == hashes[pos + 1]) mutation = true;
             }
         }
+        // COMMENT HOUSE: "hashes.size() & 1" is true when the count is odd. If so,
+        // copy the last hash onto the end, so every hash has a partner.
         if (hashes.size() & 1) {
             hashes.push_back(hashes.back());
         }
+        // COMMENT HOUSE: SHA256D64 hashes every pair at once with double SHA-256
+        // (64 bytes in, 32 bytes out per pair). It writes the results over the start
+        // of the same list to save memory. Then resize() throws away the second half,
+        // which is now leftover. The list is now one level up and half as long.
         SHA256D64(hashes[0].begin(), hashes[0].begin(), hashes.size() / 2);
         hashes.resize(hashes.size() / 2);
     }
     if (mutated) *mutated = mutation;
+    // COMMENT HOUSE: An empty list has no root, so the answer is all zeros. A real
+    // block is never empty, because it always has a coinbase transaction.
     if (hashes.size() == 0) return uint256();
     return hashes[0];
 }
 
 
+// COMMENT HOUSE: BlockMerkleRoot() collects the txid of every transaction in
+// the block, in order, and builds the tree from them. This is the value that
+// must match hashMerkleRoot in the block header, or the block is invalid.
+// reserve() just sets aside memory in advance. It does not change the result.
 uint256 BlockMerkleRoot(const CBlock& block, bool* mutated)
 {
     std::vector<uint256> leaves;
@@ -83,6 +139,12 @@ uint256 BlockMerkleRoot(const CBlock& block, bool* mutated)
     return ComputeMerkleRoot(std::move(leaves), mutated);
 }
 
+// COMMENT HOUSE: BlockWitnessMerkleRoot() builds a SECOND tree, from the
+// wtxids (IDs that include signature data, see primitives/transaction.cpp).
+// This root is not in the header. Since SegWit, it is stored inside the
+// coinbase transaction instead (more in the SegWit phase). The coinbase's own
+// leaf is set to all zeros, because the coinbase cannot contain a fingerprint
+// of itself.
 uint256 BlockWitnessMerkleRoot(const CBlock& block)
 {
     std::vector<uint256> leaves;
@@ -95,6 +157,16 @@ uint256 BlockWitnessMerkleRoot(const CBlock& block)
 }
 
 /* This implements a constant-space merkle path calculator, limited to 2^32 leaves. */
+// COMMENT HOUSE: MerkleComputation() is an advanced function. You can skip
+// it on a first read. It builds the merkle path for the leaf at leaf_pos: the
+// list of "partner" hashes, one per level, that someone needs in order to
+// climb from that leaf to the root and check it matches.
+// It gets the same root as ComputeMerkleRoot(), but uses a clever trick: it
+// reads the leaves one at a time and keeps at most one hash per level (the
+// inner array), so it uses very little memory. It does this using the binary
+// digits of count, much like carrying digits when you add 1 in binary. The
+// original developer comments inside explain each step.
+// "static" means this function can only be used inside this file.
 static void MerkleComputation(const std::vector<uint256>& leaves, uint32_t leaf_pos, std::vector<uint256>& path)
 {
     path.clear();
@@ -179,6 +251,9 @@ static std::vector<uint256> ComputeMerklePath(const std::vector<uint256>& leaves
     return ret;
 }
 
+// COMMENT HOUSE: TransactionMerklePath() gives the proof that the
+// transaction at "position" is in the block: the partner hashes from the
+// bottom of the tree to the top. Position 0 is the coinbase transaction.
 std::vector<uint256> TransactionMerklePath(const CBlock& block, uint32_t position)
 {
     std::vector<uint256> leaves;

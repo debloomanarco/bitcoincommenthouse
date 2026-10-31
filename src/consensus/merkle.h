@@ -2,6 +2,10 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// It announces the merkle tree functions, whose code is in
+// consensus/merkle.cpp. Read that file for the full explanation of what a
+// merkle tree is and why Bitcoin uses one.
 #ifndef BITCOIN_CONSENSUS_MERKLE_H
 #define BITCOIN_CONSENSUS_MERKLE_H
 
@@ -10,6 +14,9 @@
 #include <cstdint>
 #include <vector>
 
+// COMMENT HOUSE: This line only says "a type called CBlock exists". It is
+// called a forward declaration. It lets this file mention CBlock without
+// including all of primitives/block.h.
 class CBlock;
 
 /**
@@ -17,6 +24,8 @@ class CBlock;
  * If non-null, `*mutated` is set to true if two identical hashes are paired at
  * any tree level before the odd-count hash duplication step, and false otherwise.
  */
+// COMMENT HOUSE: "= nullptr" means the second argument is optional. Callers
+// who do not care about the duplicate check can leave it out.
 uint256 ComputeMerkleRoot(std::vector<uint256> hashes, bool* mutated = nullptr);
 
 /*
