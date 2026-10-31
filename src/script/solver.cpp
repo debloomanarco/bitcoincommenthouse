@@ -3,6 +3,10 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The code that recognises standard script shapes (see TxoutType in
+// script/solver.h). It works by comparing a script's bytes with each known
+// pattern, like matching a key against a set of lock shapes.
 #include <script/solver.h>
 
 #include <prevector.h>
@@ -13,6 +17,8 @@
 #include <cassert>
 #include <string>
 
+// COMMENT HOUSE: valtype is a short name for "a list of bytes", the kind of
+// item that sits on the Script stack.
 typedef std::vector<unsigned char> valtype;
 
 std::string GetTxnOutputType(TxoutType t)
@@ -33,6 +39,9 @@ std::string GetTxnOutputType(TxoutType t)
     assert(false);
 }
 
+// COMMENT HOUSE: P2PK: the script is exactly <push of a 65- or 33-byte public
+// key> OP_CHECKSIG. The first byte is the push length, which is the key's
+// size.
 static bool MatchPayToPubkey(const CScript& script, valtype& pubkey)
 {
     if (script.size() == CPubKey::SIZE + 2 && script[0] == CPubKey::SIZE && script.back() == OP_CHECKSIG) {
@@ -46,6 +55,9 @@ static bool MatchPayToPubkey(const CScript& script, valtype& pubkey)
     return false;
 }
 
+// COMMENT HOUSE: P2PKH: exactly 25 bytes, in this order:
+// OP_DUP OP_HASH160 <push 20 bytes> [20-byte hash] OP_EQUALVERIFY OP_CHECKSIG.
+// Bytes 3 to 22 are the hash, which is copied out.
 static bool MatchPayToPubkeyHash(const CScript& script, valtype& pubkeyhash)
 {
     if (script.size() == 25 && script[0] == OP_DUP && script[1] == OP_HASH160 && script[2] == 20 && script[23] == OP_EQUALVERIFY && script[24] == OP_CHECKSIG) {
@@ -82,6 +94,8 @@ static std::optional<int> GetScriptNumber(opcodetype opcode, valtype data, int m
     return count;
 }
 
+// COMMENT HOUSE: Multisig: <m> <pubkey 1> ... <pubkey n> <n> OP_CHECKMULTISIG,
+// meaning "m of these n keys must sign".
 static bool MatchMultisig(const CScript& script, int& required_sigs, std::vector<valtype>& pubkeys)
 {
     opcodetype opcode;
@@ -138,6 +152,12 @@ std::optional<std::pair<int, std::vector<std::span<const unsigned char>>>> Match
     return std::pair{*threshold, std::move(keyspans)};
 }
 
+// COMMENT HOUSE: Solver() tries each known shape in turn and returns the first
+// one that matches. It also returns that shape's important data (the
+// "solutions") in vSolutionsRet: for P2PKH the key hash, for multisig m, the
+// keys and n, and so on. If nothing matches, it returns NONSTANDARD.
+// Shapes are tried roughly from the most constrained to the least: P2SH,
+// then SegWit/Taproot, then OP_RETURN data, then the oldest shapes.
 TxoutType Solver(const CScript& scriptPubKey, std::vector<std::vector<unsigned char>>& vSolutionsRet)
 {
     vSolutionsRet.clear();
@@ -153,6 +173,10 @@ TxoutType Solver(const CScript& scriptPubKey, std::vector<std::vector<unsigned c
 
     int witnessversion;
     std::vector<unsigned char> witnessprogram;
+    // COMMENT HOUSE: A "witness program" is a SegWit output: a version number
+    // (0 to 16) followed by 2 to 40 bytes of data. Version 0 with 20 bytes is
+    // P2WPKH, version 0 with 32 bytes is P2WSH, and version 1 with 32 bytes is
+    // Taproot (Phases 7 and 8).
     if (scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram)) {
         if (witnessversion == 0 && witnessprogram.size() == WITNESS_V0_KEYHASH_SIZE) {
             vSolutionsRet.push_back(std::move(witnessprogram));
