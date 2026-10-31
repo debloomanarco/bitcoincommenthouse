@@ -2,6 +2,24 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The link between LOCKING SCRIPTS and ADDRESSES. People never type a
+// locking script. They type an address, like "1A1zP1...", "3J98t1..." or
+// "bc1q...". Under the hood, every address stands for one standard script
+// shape (see TxoutType in script/solver.h), plus the important bytes inside
+// it (a key hash, a script hash, or a Taproot key).
+// This file defines a "destination" (CTxDestination): the address's MEANING,
+// before it is written out as text. It has two main functions:
+//   - ExtractDestination(): locking script to destination ("who does this
+//     output pay?").
+//   - GetScriptForDestination(): destination to locking script (to pay an
+//     address, build its lock).
+// Turning a destination into address TEXT (and back) is done in key_io.cpp,
+// using base58.cpp for "1..." and "3..." addresses and bech32.cpp for
+// "bc1..." addresses.
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_ADDRESSTYPE_H
 #define BITCOIN_ADDRESSTYPE_H
 
@@ -16,6 +34,9 @@
 #include <variant>
 #include <vector>
 
+// COMMENT HOUSE: CNoDestination: "this script has no address". It keeps the
+// script itself, for example an OP_RETURN data output or a nonstandard
+// script.
 class CNoDestination
 {
 private:
@@ -31,6 +52,8 @@ public:
     friend bool operator<(const CNoDestination& a, const CNoDestination& b) { return a.GetScript() < b.GetScript(); }
 };
 
+// COMMENT HOUSE: PubKeyDestination: a P2PK output (the whole public key is in
+// the lock, as in the genesis block). It has no address format of its own.
 struct PubKeyDestination {
 private:
     CPubKey m_pubkey;
@@ -44,6 +67,23 @@ public:
     friend bool operator<(const PubKeyDestination& a, const PubKeyDestination& b) { return a.GetPubKey() < b.GetPubKey(); }
 };
 
+// COMMENT HOUSE: THE DESTINATION TYPES. Each one wraps the bytes that matter
+// for one script shape:
+//   - PKHash:              P2PKH, the 20-byte Hash160 of a public key.
+//                          Address starts with "1".
+//   - ScriptHash:          P2SH, the 20-byte Hash160 of a script. Starts
+//                          with "3".
+//   - WitnessV0ScriptHash: P2WSH, the 32-byte SHA-256 of a script.
+//                          Starts with "bc1q" (long).
+//   - WitnessV0KeyHash:    P2WPKH, the 20-byte Hash160 of a key. Starts with
+//                          "bc1q" (short).
+//   - WitnessV1Taproot:    P2TR, the 32-byte Taproot output key. Starts with
+//                          "bc1p".
+//   - WitnessUnknown:      a future SegWit version.
+//   - PayToAnchor:         the special tiny "anchor" output.
+// Each is its own type (like Txid and Wtxid in
+// primitives/transaction_identifier.h), so a script hash can never be
+// mistaken for a key hash.
 struct PKHash : public BaseHash<uint160>
 {
     PKHash() : BaseHash() {}
@@ -55,6 +95,9 @@ CKeyID ToKeyID(const PKHash& key_hash);
 
 struct WitnessV0KeyHash;
 
+// COMMENT HOUSE: The two "= delete" lines forbid building a ScriptHash
+// straight from a key hash. The developer comment warns that this would not
+// do what you might expect.
 struct ScriptHash : public BaseHash<uint160>
 {
     ScriptHash() : BaseHash() {}
@@ -117,6 +160,9 @@ public:
 };
 
 /** Witness program for Pay-to-Anchor output script type */
+// COMMENT HOUSE: Pay-to-Anchor (P2A) is SegWit version 1 with the two-byte
+// program 0x4e73. Anyone may spend it. It exists only to let a transaction's
+// fee be bumped later by spending it in a child transaction.
 inline const std::vector<unsigned char> ANCHOR_BYTES{0x4e, 0x73};
 
 struct PayToAnchor : public WitnessUnknown
@@ -139,6 +185,9 @@ struct PayToAnchor : public WitnessUnknown
  *  * WitnessUnknown: TxoutType::WITNESS_UNKNOWN destination (P2W??? address)
  *  A CTxDestination is the internal data type encoded in a bitcoin address
  */
+// COMMENT HOUSE: CTxDestination holds exactly ONE of the types above. A
+// std::variant is like a box with one compartment per type, where only one
+// is in use at a time.
 using CTxDestination = std::variant<CNoDestination, PubKeyDestination, PKHash, ScriptHash, WitnessV0ScriptHash, WitnessV0KeyHash, WitnessV1Taproot, PayToAnchor, WitnessUnknown>;
 
 /** Check whether a CTxDestination corresponds to one with an address. */
@@ -154,6 +203,10 @@ bool IsValidDestination(const CTxDestination& dest);
  * Returns true for standard destinations with addresses - P2PKH, P2SH, P2WPKH, P2WSH, P2TR and P2W??? scripts.
  * Returns false for non-standard destinations and those without addresses - P2PK, bare multisig, null data, and nonstandard scripts.
  */
+// COMMENT HOUSE: ExtractDestination(): "who does this output pay?". It uses
+// Solver() (script/solver.cpp) to recognise the script's shape, then puts
+// the matching destination in addressRet. It returns true only if the
+// script has a real address.
 bool ExtractDestination(const CScript& scriptPubKey, CTxDestination& addressRet);
 
 /**
@@ -161,6 +214,9 @@ bool ExtractDestination(const CScript& scriptPubKey, CTxDestination& addressRet)
  * script for a CKeyID destination, a P2SH script for a CScriptID, and an empty
  * script for CNoDestination.
  */
+// COMMENT HOUSE: GetScriptForDestination(): the reverse. It builds the
+// locking script for a destination. For a PKHash, it gives the classic
+// OP_DUP OP_HASH160 <hash> OP_EQUALVERIFY OP_CHECKSIG.
 CScript GetScriptForDestination(const CTxDestination& dest);
 
 #endif // BITCOIN_ADDRESSTYPE_H
