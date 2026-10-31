@@ -373,6 +373,12 @@ static bool EvalChecksigPreTapscript(const valtype& vchSig, const valtype& vchPu
     return true;
 }
 
+// COMMENT HOUSE: EvalChecksigTapscript() (Phase 8): how OP_CHECKSIG works
+// inside a Taproot script. The key is 32 bytes and the signature is a Schnorr
+// signature (checked with XOnlyPubKey::VerifySchnorr() in pubkey.cpp). An
+// empty signature simply means "no", which is how multisig is done. Each
+// signature check uses up some of a "validation weight" budget that depends on
+// the witness size, so a script cannot demand more work than it paid for.
 static bool EvalChecksigTapscript(const valtype& sig, const valtype& pubkey, ScriptExecutionData& execdata, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror, bool& success)
 {
     assert(sigversion == SigVersion::TAPSCRIPT);
@@ -1145,6 +1151,13 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 }
                 break;
 
+                // COMMENT HOUSE: OP_CHECKSIGADD (Phase 8, BIP 342), Taproot's way to do
+                // multisig. Stack before: sig, n, pubkey. If the signature is valid, n+1 is
+                // pushed, otherwise n. A "2 of 3" script looks like:
+                //   <key A> OP_CHECKSIG <key B> OP_CHECKSIGADD <key C> OP_CHECKSIGADD
+                //   OP_2 OP_NUMEQUAL
+                // Each key is checked once, which is simpler and faster than the old
+                // OP_CHECKMULTISIG.
                 case OP_CHECKSIGADD:
                 {
                     // OP_CHECKSIGADD is only available in Tapscript
@@ -1545,6 +1558,13 @@ static bool HandleMissingData(MissingDataBehavior mdb)
     assert(!"Unknown MissingDataBehavior value");
 }
 
+// COMMENT HOUSE: SignatureHashSchnorr() (Phase 8), what a Taproot signature
+// signs (BIP 341). It plays the same role as SignatureHash() further down,
+// but with a cleaner recipe. It ALWAYS covers the amounts and locking scripts
+// of EVERY coin being spent, not just this one. That way a wallet can be sure
+// of the exact fee even if it only signs one input. The parts are fed into a
+// TaggedHash("TapSighash") (see hash.h). ext_flag tells apart a key path
+// spend (0) from a script path spend (1).
 template<typename T>
 bool SignatureHashSchnorr(uint256& hash_out, ScriptExecutionData& execdata, const T& tx_to, uint32_t in_pos, uint8_t hash_type, SigVersion sigversion, const PrecomputedTransactionData& cache, MissingDataBehavior mdb)
 {
@@ -1936,6 +1956,9 @@ static bool ExecuteWitnessScript(const std::span<const valtype>& stack_span, con
     std::vector<valtype> stack{stack_span.begin(), stack_span.end()};
 
     if (sigversion == SigVersion::TAPSCRIPT) {
+        // COMMENT HOUSE: (Phase 8) In a Taproot script, if any OP_SUCCESS opcode
+        // appears ANYWHERE, the script succeeds at once (see IsOpSuccess() in
+        // script/script.h). These opcodes are reserved for future upgrades.
         // OP_SUCCESSx processing overrides everything, including stack element size limits
         CScript::const_iterator pc = exec_script.begin();
         while (pc < exec_script.end()) {
@@ -1971,6 +1994,16 @@ static bool ExecuteWitnessScript(const std::span<const valtype>& stack_span, con
     return true;
 }
 
+// COMMENT HOUSE: TAPROOT SCRIPT TREES (Phase 8).
+// The hidden scripts of a Taproot output are arranged in a merkle tree (as in
+// consensus/merkle.cpp):
+//   - ComputeTapleafHash(): the hash of one script (a "leaf"), with its
+//     version, using TaggedHash("TapLeaf").
+//   - ComputeTapbranchHash(): combines two hashes into their parent,
+//     TaggedHash("TapBranch"). The smaller one always goes first, so the
+//     order of the two does not matter.
+//   - ComputeTaprootMerkleRoot(): climbs from a leaf to the root, using the
+//     partner hashes listed in the "control block".
 uint256 ComputeTapleafHash(uint8_t leaf_version, std::span<const unsigned char> script)
 {
     return (HashWriter{HASHER_TAPLEAF} << leaf_version << CompactSizeWriter(script.size()) << script).GetSHA256();
@@ -2002,6 +2035,11 @@ uint256 ComputeTaprootMerkleRoot(std::span<const unsigned char> control, const u
     return k;
 }
 
+// COMMENT HOUSE: VerifyTaprootCommitment() (Phase 8): was this script really
+// hidden in this output? The control block holds the internal key P and the
+// merkle path. It rebuilds the merkle root from the script's leaf hash, then
+// checks that the output key Q equals P tweaked with that root
+// (CheckTapTweak() in pubkey.cpp).
 static bool VerifyTaprootCommitment(const std::vector<unsigned char>& control, const std::vector<unsigned char>& program, const uint256& tapleaf_hash)
 {
     assert(control.size() >= TAPROOT_CONTROL_BASE_SIZE);
@@ -2063,6 +2101,15 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
         } else {
             return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_WRONG_LENGTH);
         }
+    // COMMENT HOUSE: TAPROOT SPENDING (Phase 8, BIP 341). The 32-byte program is
+    // the output key Q (see the TapTweak notes in pubkey.cpp). An optional last
+    // witness item starting with 0x50 is the "annex", which is reserved for the
+    // future and set aside. Then there are two possibilities:
+    //   - KEY PATH: one witness item, a Schnorr signature for Q. That is all.
+    //   - SCRIPT PATH: the last two items are the script and the control
+    //     block. VerifyTaprootCommitment() proves the script was hidden in Q,
+    //     then the script is run with the remaining items as its stack. Only
+    //     the one script used is ever revealed. The others stay secret.
     } else if (witversion == 1 && program.size() == WITNESS_V1_TAPROOT_SIZE && !is_p2sh) {
         // BIP341 Taproot: 32-byte non-P2SH witness v1 program (which encodes a P2C-tweaked pubkey)
         if (!(flags & SCRIPT_VERIFY_TAPROOT)) return set_success(serror);
