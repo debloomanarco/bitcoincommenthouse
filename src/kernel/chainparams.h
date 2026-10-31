@@ -3,6 +3,21 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// It describes CChainParams, the "settings card" for one Bitcoin network
+// (mainnet, testnet, signet or regtest). The actual numbers are filled in
+// by kernel/chainparams.cpp, so read that file for the genesis block, magic
+// bytes, ports and address prefixes. A CChainParams holds:
+//   - the consensus rules' numbers (Consensus::Params, consensus/params.h),
+//   - networking details (magic bytes, default port, DNS seeds),
+//   - address formats (base58 prefixes, the bech32 "bc" part),
+//   - the genesis block, and
+//   - assumeutxo snapshots and other start-up helpers.
+// The rest of the program asks Params() for these, so the same code can run
+// on any network.
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_KERNEL_CHAINPARAMS_H
 #define BITCOIN_KERNEL_CHAINPARAMS_H
 
@@ -31,6 +46,10 @@ struct AssumeutxoHash : public BaseHash<uint256> {
  * here are security critical, since they dictate which UTXO snapshots are recognized
  * as valid.
  */
+// COMMENT HOUSE: AssumeutxoData: a trusted fingerprint of the full UTXO set
+// (coins.h) at a given block height. A new node can load a downloaded copy
+// of the UTXO set, check it against this hash, and start using the chain
+// quickly, while it checks the full history in the background.
 struct AssumeutxoData {
     int height;
 
@@ -54,6 +73,8 @@ struct AssumeutxoData {
  *
  * See also: CChainParams::TxData, GuessVerificationProgress.
  */
+// COMMENT HOUSE: ChainTxData: rough transaction counts, used only to show how
+// far along a new node is while it downloads the chain.
 struct ChainTxData {
     int64_t nTime;    //!< UNIX timestamp of last known number of transactions
     uint64_t tx_count; //!< total number of transactions between genesis and that timestamp
@@ -61,6 +82,9 @@ struct ChainTxData {
 };
 
 //! Configuration for headers sync memory usage.
+// COMMENT HOUSE: Settings for downloading block HEADERS safely before the
+// full blocks. They limit memory use if a peer sends a long fake chain of
+// headers.
 struct HeadersSyncParams {
     //! Distance in blocks between header commitments.
     size_t commitment_period{0};
@@ -73,9 +97,17 @@ struct HeadersSyncParams {
  * CChainParams defines various tweakable parameters of a given instance of the
  * Bitcoin system.
  */
+// COMMENT HOUSE: CChainParams, the settings card. The functions in the
+// "public:" part just hand out the stored values (GetConsensus(),
+// GetDefaultPort(), GenesisBlock(), Bech32HRP() and so on). The values
+// themselves are in the "protected:" part at the bottom.
 class CChainParams
 {
 public:
+    // COMMENT HOUSE: The kinds of base58 data that each have their own version
+    // prefix (see base58Prefixes in kernel/chainparams.cpp and key_io.cpp):
+    // P2PKH addresses, P2SH addresses, private keys (WIF), and extended
+    // public and private keys (xpub/xprv).
     enum Base58Type {
         PUBKEY_ADDRESS,
         SCRIPT_ADDRESS,
@@ -131,6 +163,8 @@ public:
     /**
      * VersionBitsParameters holds activation parameters
      */
+    // COMMENT HOUSE: Options that test networks can use to change when upgrades
+    // switch on (see ApplyDeploymentOptions() in kernel/chainparams.cpp).
     struct VersionBitsParameters {
         int64_t start_time;
         int64_t timeout;
@@ -168,6 +202,7 @@ public:
         DeploymentOptions dep_opts{};
     };
 
+    // COMMENT HOUSE: Functions that create the settings for each network.
     static std::unique_ptr<const CChainParams> RegTest(const RegTestOptions& options);
     static std::unique_ptr<const CChainParams> RegTest() { const RegTestOptions opts{}; return RegTest(opts); }
     static std::unique_ptr<const CChainParams> SigNet(const SigNetOptions& options);
@@ -182,6 +217,8 @@ public:
 protected:
     CChainParams() = default;
 
+    // COMMENT HOUSE: The stored values, filled in for each network by
+    // kernel/chainparams.cpp.
     Consensus::Params consensus;
     MessageStartChars pchMessageStart;
     uint16_t nDefaultPort;
