@@ -3,6 +3,13 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The code for the private-key functions announced in key.h. Read key.h
+// first. Almost every function here is a thin wrapper: it hands the work
+// to the secp256k1 library (the functions whose names start with
+// "secp256k1_"), which does the actual elliptic curve maths.
+// The most important functions for beginners are MakeNewKey(), GetPubKey()
+// and Sign(). The ugly file-format functions at the top can be skipped.
 #include <key.h>
 
 #include <crypto/common.h>
@@ -18,6 +25,8 @@
 
 #include <algorithm>
 
+// COMMENT HOUSE: A "context" is the secp256k1 library's working memory for
+// signing. It is created once, in ECC_Start() at the bottom of this file.
 static secp256k1_context* secp256k1_context_sign = nullptr;
 
 /** These functions are taken from the libsecp256k1 distribution and are very ugly. */
@@ -37,6 +46,9 @@ static secp256k1_context* secp256k1_context_sign = nullptr;
  *
  * out32 must point to an output buffer of length at least 32 bytes.
  */
+// COMMENT HOUSE: You can skip this function and ec_seckey_export_der() below.
+// They read and write private keys in an old file format (DER) that early
+// wallets used.
 int ec_seckey_import_der(const secp256k1_context* ctx, unsigned char *out32, const unsigned char *seckey, size_t seckeylen) {
     const unsigned char *end = seckey + seckeylen;
     memset(out32, 0, 32);
@@ -156,10 +168,15 @@ int ec_seckey_export_der(const secp256k1_context *ctx, unsigned char *seckey, si
     return 1;
 }
 
+// COMMENT HOUSE: Asks the secp256k1 library whether these 32 bytes are an
+// allowed private key (above 0 and below the curve's limit).
 bool CKey::Check(const unsigned char *vch) {
     return secp256k1_ec_seckey_verify(secp256k1_context_static, vch);
 }
 
+// COMMENT HOUSE: Pick 32 truly random bytes. In the extremely rare case they
+// are not an allowed key, try again. The do { } while loop runs its body
+// first, then repeats while the condition is true.
 void CKey::MakeNewKey(bool fCompressedIn) {
     MakeKeyData();
     do {
@@ -181,6 +198,9 @@ CPrivKey CKey::GetPrivKey() const {
     return seckey;
 }
 
+// COMMENT HOUSE: Private key to public key: secp256k1_ec_pubkey_create() does
+// the one-way elliptic curve maths. The result is then written out in the
+// compressed (33-byte) or uncompressed (65-byte) form.
 CPubKey CKey::GetPubKey() const {
     assert(keydata);
     secp256k1_pubkey pubkey;
@@ -195,6 +215,10 @@ CPubKey CKey::GetPubKey() const {
 }
 
 // Check that the sig has a low R value and will be less than 71 bytes
+// COMMENT HOUSE: An ECDSA signature is made of two numbers, called R and S.
+// This checks whether R is "low" (its first byte is below 0x80). A low R
+// saves one byte when the signature is written out, which makes transactions
+// slightly smaller and cheaper.
 bool SigHasLowR(const secp256k1_ecdsa_signature* sig)
 {
     unsigned char compact_sig[64];
@@ -207,6 +231,19 @@ bool SigHasLowR(const secp256k1_ecdsa_signature* sig)
     return compact_sig[0] < 0x80;
 }
 
+// COMMENT HOUSE: Sign(), making an ECDSA signature.
+//   1. secp256k1_ecdsa_sign() signs the hash with the private key. Signing
+//      needs a secret one-time number (a "nonce"). If it were ever reused or
+//      guessed, the private key could be worked out from the signatures!
+//      RFC 6979 makes this number safely from the key and the hash, so it is
+//      never accidentally reused.
+//   2. "Grinding": if R is not low (see SigHasLowR()), sign again with a
+//      slightly different nonce, until it is. On average this takes 2 tries.
+//   3. The signature is written in the standard DER format, which BIP 66
+//      made mandatory (see consensus/params.h).
+//   4. Safety check: verify the new signature with the public key before
+//      returning it. A faulty computer could otherwise produce a broken
+//      signature, which might even leak information about the key.
 bool CKey::Sign(const uint256 &hash, std::vector<unsigned char>& vchSig, bool grind, uint32_t test_case) const {
     if (!keydata)
         return false;
@@ -235,6 +272,8 @@ bool CKey::Sign(const uint256 &hash, std::vector<unsigned char>& vchSig, bool gr
     return true;
 }
 
+// COMMENT HOUSE: Checks that a public key really belongs to this private key,
+// by signing a random message and checking the signature with the public key.
 bool CKey::VerifyPubKey(const CPubKey& pubkey) const {
     if (pubkey.IsCompressed() != fCompressed) {
         return false;
@@ -271,6 +310,7 @@ bool CKey::SignCompact(const uint256 &hash, std::vector<unsigned char>& vchSig) 
     return true;
 }
 
+// COMMENT HOUSE: Schnorr signatures (Taproot, Phase 8) are made by a KeyPair.
 bool CKey::SignSchnorr(const uint256& hash, std::span<unsigned char> sig, const uint256* merkle_root, const uint256& aux) const
 {
     KeyPair kp = ComputeKeyPair(merkle_root);
@@ -291,6 +331,8 @@ bool CKey::Load(const CPrivKey &seckey, const CPubKey &vchPubKey, bool fSkipChec
     return VerifyPubKey(vchPubKey);
 }
 
+// COMMENT HOUSE: BIP 32 child key derivation, used by wallets. You can skip
+// it, along with CExtKey further down.
 bool CKey::Derive(CKey& keyChild, ChainCode &ccChild, unsigned int nChild, const ChainCode& cc) const {
     assert(IsValid());
     assert(IsCompressed());
@@ -434,6 +476,8 @@ bool KeyPair::SignSchnorr(const uint256& hash, std::span<unsigned char> sig, con
     return ret;
 }
 
+// COMMENT HOUSE: A quick self-test at startup: make a random key and check that
+// signing and verifying work.
 bool ECC_InitSanityCheck() {
     CKey key = GenerateRandomKey();
     CPubKey pubkey = key.GetPubKey();
@@ -446,6 +490,10 @@ secp256k1_context* GetSecp256k1SignContext()
 }
 
 /** Initialize the elliptic curve support. May not be called twice without calling ECC_Stop first. */
+// COMMENT HOUSE: Creates the signing context. It is "randomised" with a secret
+// random seed. This protects against "side-channel" attacks, where someone
+// measures how long signing takes, or how much power it uses, to learn
+// about the key.
 static void ECC_Start() {
     assert(secp256k1_context_sign == nullptr);
 
