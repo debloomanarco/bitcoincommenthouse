@@ -2,6 +2,12 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The code for addresstype.h: converting between locking scripts and
+// destinations (the meaning of an address). Read addresstype.h first.
+// The two key functions are ExtractDestination() (script to destination)
+// and GetScriptForDestination() (destination to script). Together they
+// show exactly which locking script each kind of address stands for.
 #include <addresstype.h>
 
 #include <crypto/sha256.h>
@@ -17,6 +23,13 @@
 
 typedef std::vector<unsigned char> valtype;
 
+// COMMENT HOUSE: How each destination gets its bytes:
+//   - ScriptHash (P2SH): Hash160 of the script.
+//   - PKHash and WitnessV0KeyHash: Hash160 of the public key (GetID() in
+//     pubkey.h). P2PKH and P2WPKH use the SAME 20-byte hash, written as two
+//     different kinds of address.
+//   - WitnessV0ScriptHash (P2WSH): a single SHA-256 of the script, 32 bytes
+//     (see further down).
 ScriptHash::ScriptHash(const CScript& in) : BaseHash(Hash160(in)) {}
 
 PKHash::PKHash(const CPubKey& pubkey) : BaseHash(pubkey.GetID()) {}
@@ -45,6 +58,10 @@ WitnessV0ScriptHash::WitnessV0ScriptHash(const CScript& in)
     CSHA256().Write(in.data(), in.size()).Finalize(begin());
 }
 
+// COMMENT HOUSE: ExtractDestination(): ask Solver() (script/solver.cpp) which
+// shape the script is, then build the matching destination from the
+// "solutions" it found (the hash or key). P2PK, multisig, OP_RETURN data and
+// nonstandard scripts have no address, so they return false.
 bool ExtractDestination(const CScript& scriptPubKey, CTxDestination& addressRet)
 {
     std::vector<valtype> vSolutions;
@@ -104,6 +121,19 @@ bool ExtractDestination(const CScript& scriptPubKey, CTxDestination& addressRet)
 }
 
 namespace {
+// COMMENT HOUSE: CScriptVisitor: one function per destination type, each
+// building that type's locking script. std::visit (in
+// GetScriptForDestination() below) calls whichever one matches the type in
+// the box. The scripts, in plain words:
+//   - PKHash (P2PKH):     OP_DUP OP_HASH160 <hash> OP_EQUALVERIFY OP_CHECKSIG
+//   - ScriptHash (P2SH):  OP_HASH160 <hash> OP_EQUAL
+//   - WitnessV0KeyHash and WitnessV0ScriptHash: OP_0 <program>
+//                         (SegWit version 0)
+//   - WitnessV1Taproot:   OP_1 <32-byte key> (SegWit version 1)
+//   - WitnessUnknown:     OP_n <program>
+// SegWit locks are very short: just the version and the program. The real
+// checking rules live in the interpreter (VerifyWitnessProgram() in
+// script/interpreter.cpp).
 class CScriptVisitor
 {
 public:
@@ -148,6 +178,8 @@ public:
     }
 };
 
+// COMMENT HOUSE: Which destinations have a real address? Everything except
+// "no destination" and bare public keys (P2PK).
 class ValidDestinationVisitor
 {
 public:
