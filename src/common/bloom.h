@@ -2,6 +2,34 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// A BLOOM FILTER is a compact way to describe a set of items, such as "the
+// addresses in my wallet", that can answer one question: "is this item
+// maybe in the set?". The answer is either:
+//   - "definitely not", or
+//   - "maybe yes": usually right, but sometimes a "false positive".
+// It never gives a false "no".
+// How it works: start with a long row of bits, all 0. To add an item, hash
+// it several times, and each hash picks one bit to set to 1. To check an
+// item, hash it the same way: if ANY of its bits is 0, it was never added.
+// If all are 1, it was probably added, though other items might have set
+// those bits by chance. It is like a coat check where each coat gets
+// several numbered pegs. If any of your pegs is empty, your coat is
+// definitely not there.
+// Bitcoin uses two kinds:
+//   - CBloomFilter (BIP 37): a lightweight ("SPV") wallet sends one to a node
+//     to ask "only send me transactions that match this". False positives
+//     are a feature: they hide which transactions are really the wallet's.
+//     It later turned out to protect privacy badly, so Bitcoin Core no longer
+//     serves these filters unless the node's owner switches it on
+//     (-peerbloomfilters).
+//   - CRollingBloomFilter: used inside the node to cheaply remember things
+//     it has seen recently, such as transactions or addresses.
+// This is networking code, not consensus. The rules of Bitcoin do not
+// depend on it.
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_COMMON_BLOOM_H
 #define BITCOIN_COMMON_BLOOM_H
 
@@ -15,6 +43,8 @@ class COutPoint;
 class CTransaction;
 
 //! 20,000 items with fp rate < 0.1% or 10,000 items and <0.0001%
+// COMMENT HOUSE: Limits on filters that peers send, so nobody can make this
+// node do too much work: at most 36,000 bytes and 50 hash functions.
 inline constexpr unsigned int MAX_BLOOM_FILTER_SIZE{36'000}; // bytes
 inline constexpr unsigned int MAX_HASH_FUNCS = 50;
 
@@ -22,6 +52,9 @@ inline constexpr unsigned int MAX_HASH_FUNCS = 50;
  * First two bits of nFlags control how much IsRelevantAndUpdate actually updates
  * The remaining bits are reserved
  */
+// COMMENT HOUSE: When a transaction matches, should the filter also add that
+// transaction's matching outputs? Then the wallet will also see the later
+// transaction that spends them, without having to send a new filter.
 enum bloomflags
 {
     BLOOM_UPDATE_NONE = 0,
@@ -42,6 +75,11 @@ enum bloomflags
  * allowing clients to trade more bandwidth for more privacy by obfuscating which
  * keys are controlled by them.
  */
+// COMMENT HOUSE: CBloomFilter (BIP 37):
+//   - vData:      the row of bits (stored 8 per byte).
+//   - nHashFuncs: how many bits each item sets.
+//   - nTweak:     a random number mixed into every hash, so two filters
+//                 with the same items still look different.
 class CBloomFilter
 {
 private:
@@ -64,6 +102,10 @@ public:
      * It should generally always be a random value (and is largely only exposed for unit testing)
      * nFlags should be one of the BLOOM_UPDATE_* enums (not _MASK)
      */
+    // COMMENT HOUSE: Make a filter big enough for nElements items with a
+    // false-positive rate of nFPRate (for example 0.001 means 1 in 1,000). A
+    // lower rate needs a bigger filter. As the developer comment says, a filter
+    // made for 0 items is empty and matches everything.
     CBloomFilter(unsigned int nElements, double nFPRate, unsigned int nTweak, unsigned char nFlagsIn);
     CBloomFilter() : nHashFuncs(0), nTweak(0), nFlags(0) {}
 
@@ -80,6 +122,10 @@ public:
     bool IsWithinSizeConstraints() const;
 
     //! Also adds any outputs which match the filter to the filter (to match their spending txes)
+    // COMMENT HOUSE: IsRelevantAndUpdate() is what a node runs for each
+    // transaction: does it match the wallet's filter? It checks the txid, every
+    // piece of data in the outputs' scripts, the coins the inputs spend, and the
+    // data in the inputs' scripts. Explained in bloom.cpp.
     bool IsRelevantAndUpdate(const CTransaction& tx);
 };
 
@@ -108,6 +154,11 @@ public:
  *
  *     3/(log(256)*log(2)) * log(1/fpRate) * nElements
  */
+// COMMENT HOUSE: CRollingBloomFilter, a filter that forgets old items.
+// It always remembers at least the last N items added. To stay small, it
+// works in "generations" and quietly clears the oldest ones as new items
+// arrive. The node uses it for things like "have I already told this peer
+// about this transaction?".
 class CRollingBloomFilter
 {
 public:
