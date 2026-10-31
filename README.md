@@ -9,13 +9,11 @@ https://bitcoincore.org/en/download/.
 What is Bitcoin Comment House?
 ---------------------
 
-Bitcoin Comment House is an educational project that adds comments to Core so that highschoolers can understand since comments on the main repo are discourage because of clutter. the Bitcoin peer-to-peer network to download and fully
-validate blocks and transactions. 
+Bitcoin Comment House is an educational project that adds comments to Core so that highschoolers can understand since comments on the main repo are discourage because of clutter.
 
 
 Bitcoin Comment House: Proposed Learning Sequence
 
-I made no edits. Every file, function and line number below comes from this checkout (beginner-comments branch, which matches v31.0). There are no beginner explanation comments anywhere in the tree yet, so we're starting fresh.
 
 How the repository is organized
 
@@ -157,7 +155,5 @@ Files to deliberately avoid at first
 How I'd keep the work safe and traceable
 
 1. One comment marker everywhere: // COMMENT HOUSE:, so grep finds every annotation and reviewers can tell them apart from developer comments.
-2. Behavior check on every change: git diff should show only added comment lines. A build plus ctest and the functional tests confirm nothing else changed.
-3. Annotation log: a file like doc/beginner/ANNOTATION_LOG.md, with one row per file: path, functions covered, terms defined, analogies used, and the commit that annotated it.
-4. Glossary: each term is defined once, where it first appears in this sequence, and later files link back to that first definition.
+2. Behavior check on every change: git diff should show only added comment lines. and updates from upstream. bitcoin core with added comments
 
