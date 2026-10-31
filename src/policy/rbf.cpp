@@ -2,6 +2,21 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// REPLACE-BY-FEE (RBF): swapping a waiting transaction for a new version
+// that pays a higher fee.
+// Imagine you send a transaction with a fee that turns out to be too low,
+// and it sits in the mempool for hours. RBF lets you make a NEW transaction
+// that spends at least one of the same coins, but pays more. The two
+// "conflict" (a coin can only be spent once), so nodes must keep only one.
+// With RBF they keep the one that pays more, and miners prefer it too.
+// This is policy, not consensus (see policy/policy.cpp). Whichever version
+// ends up in a block is valid.
+// The rules below make sure replacements are always worth it for the
+// network: each replacement must pay MORE in total, pay extra for its own
+// relay, and make the mempool better overall. Otherwise someone could
+// replace a transaction thousands of times, each time adding just 1
+// satoshi, and make every node do lots of work for almost nothing.
 #include <policy/rbf.h>
 
 #include <consensus/amount.h>
@@ -21,6 +36,12 @@
 
 #include <compare>
 
+// COMMENT HOUSE: IsRBFOptIn(): did this transaction ask to be replaceable?
+// Under BIP 125, a transaction signals "you may replace me" by giving any
+// input an nSequence below 0xfffffffe. It also counts if any unconfirmed
+// transaction it depends on (an "ancestor") signals. Today, Bitcoin Core
+// allows replacing any unconfirmed transaction by default ("full RBF"), so
+// this is mostly used to report the signal to users.
 RBFTransactionState IsRBFOptIn(const CTransaction& tx, const CTxMemPool& pool)
 {
     AssertLockHeld(pool.cs);
@@ -55,6 +76,13 @@ RBFTransactionState IsRBFOptInEmptyMempool(const CTransaction& tx)
     return SignalsOptInRBF(tx) ? RBFTransactionState::REPLACEABLE_BIP125 : RBFTransactionState::UNKNOWN;
 }
 
+// COMMENT HOUSE: Find every mempool transaction that would have to be thrown
+// out: the transactions that directly conflict with the new one, plus all
+// their descendants (they depend on outputs that would disappear). Rule 5:
+// refuse if the new transaction conflicts with too many separate groups
+// (clusters), because that would be a lot of work to process.
+// The function returns nothing (std::nullopt) if all is well, or a text
+// reason if the replacement is refused.
 std::optional<std::string> GetEntriesForConflicts(const CTransaction& tx,
                                                   CTxMemPool& pool,
                                                   const CTxMemPool::setEntries& iters_conflicting,
@@ -82,6 +110,9 @@ std::optional<std::string> GetEntriesForConflicts(const CTransaction& tx,
     return std::nullopt;
 }
 
+// COMMENT HOUSE: A replacement may not depend on a transaction it is
+// replacing. That would make no sense: it would need the very coins it is
+// trying to make disappear.
 std::optional<std::string> EntriesAndTxidsDisjoint(const CTxMemPool::setEntries& ancestors,
                                                    const std::set<Txid>& direct_conflicts,
                                                    const Txid& txid)
@@ -97,6 +128,12 @@ std::optional<std::string> EntriesAndTxidsDisjoint(const CTxMemPool::setEntries&
     return std::nullopt;
 }
 
+// COMMENT HOUSE: The fee rules:
+//   - Rule 3: the replacement must pay at least as much in TOTAL fees as
+//     everything it replaces.
+//   - Rule 4: on top of that, it must pay for its OWN relay, at the
+//     incremental relay fee (0.1 sat/vB by default, see policy/policy.h).
+//     That makes repeated tiny bumps cost real money.
 std::optional<std::string> PaysForRBF(CAmount original_fees,
                                       CAmount replacement_fees,
                                       size_t replacement_vsize,
@@ -124,6 +161,12 @@ std::optional<std::string> PaysForRBF(CAmount original_fees,
     return std::nullopt;
 }
 
+// COMMENT HOUSE: The "feerate diagram" check: after the swap, would the
+// mempool be strictly BETTER for miners? Think of lining up all mempool
+// transactions from best fee rate to worst and counting how many fees a
+// miner would get for each amount of block space. The replacement must make
+// that line higher somewhere and lower nowhere. This is a newer and more
+// precise version of the old rule "the new fee rate must be higher".
 std::optional<std::pair<DiagramCheckError, std::string>> ImprovesFeerateDiagram(CTxMemPool::ChangeSet& changeset)
 {
     // Require that the replacement strictly improves the mempool's feerate diagram.
