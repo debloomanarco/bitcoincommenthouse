@@ -2,6 +2,22 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// VERSION BITS (BIP 9), how miners vote on a new rule. consensus/params.h
+// describes the settings (BIP9Deployment). This file does the counting.
+// Each proposed upgrade is given one bit of the block header's nVersion
+// field. A miner who is ready for the upgrade sets that bit in the blocks it
+// mines. Every 2016 blocks (one difficulty period, about two weeks), nodes
+// count how many blocks set the bit. Each upgrade moves through a series of
+// STATES, like a proposal going through a vote:
+//   DEFINED   -> not started yet (its start time has not been reached).
+//   STARTED   -> voting is open. Blocks are counted each period.
+//   LOCKED_IN -> enough blocks voted yes (by default 1916 of 2016, which is
+//                95%). The result is final and the rule will switch on.
+//   ACTIVE    -> the new rule is enforced from now on.
+//   FAILED    -> the timeout passed without enough votes.
+// SegWit and Taproot both went through this process. They are now "buried"
+// (see BuriedDeployment in consensus/params.h).
 #include <consensus/params.h>
 #include <deploymentinfo.h>
 #include <kernel/chainparams.h>
@@ -11,6 +27,7 @@
 
 using enum ThresholdState;
 
+// COMMENT HOUSE: The name of each state, as shown to users.
 std::string StateName(ThresholdState state)
 {
     switch (state) {
@@ -23,6 +40,16 @@ std::string StateName(ThresholdState state)
     return "invalid";
 }
 
+// COMMENT HOUSE: GetStateFor(): what state is the upgrade in for the block
+// AFTER pindexPrev?
+//   1. Special settings: ALWAYS_ACTIVE and NEVER_ACTIVE are answered at once.
+//   2. The state only changes at the start of a 2016-block period, so jump
+//      back to the end of the previous period.
+//   3. Walk back one period at a time until reaching a period whose state is
+//      already known (saved in "cache"), or the start.
+//   4. Walk FORWARD again, one period at a time, applying the rules in the
+//      "switch" below to work out each period's state, and save each answer.
+// Saving answers means the counting only has to be done once per period.
 ThresholdState AbstractThresholdConditionChecker::GetStateFor(const CBlockIndex* pindexPrev, ThresholdConditionCache& cache) const
 {
     int nPeriod = Period();
@@ -80,6 +107,9 @@ ThresholdState AbstractThresholdConditionChecker::GetStateFor(const CBlockIndex*
                 }
                 break;
             }
+            // COMMENT HOUSE: Voting is open: count the blocks in the last period whose
+            // version has this upgrade's bit set (Condition()). If enough did, the
+            // upgrade is LOCKED_IN. If not, and the timeout has passed, it FAILED.
             case ThresholdState::STARTED: {
                 // We need to count
                 const CBlockIndex* pindexCount = pindexPrev;
@@ -97,6 +127,8 @@ ThresholdState AbstractThresholdConditionChecker::GetStateFor(const CBlockIndex*
                 }
                 break;
             }
+            // COMMENT HOUSE: Locked in: switch to ACTIVE at the next period, as long as
+            // the minimum activation height has been reached.
             case ThresholdState::LOCKED_IN: {
                 // Progresses into ACTIVE provided activation height will have been reached.
                 if (pindexPrev->nHeight + 1 >= min_activation_height) {
@@ -262,6 +294,11 @@ bool VersionBitsCache::IsActiveAfter(const CBlockIndex* pindexPrev, const Consen
     return ThresholdState::ACTIVE == VersionBitsConditionChecker(params, pos).GetStateFor(pindexPrev, m_caches[pos]);
 }
 
+// COMMENT HOUSE: ComputeBlockVersion(): the nVersion this node uses when it
+// mines a block (node/miner.cpp). It starts from VERSIONBITS_TOP_BITS
+// (0x20000000), which marks the block as using version bits, then sets the
+// bit of every upgrade that is STARTED or LOCKED_IN, meaning "this node
+// supports it". "|=" switches a bit on.
 static int32_t ComputeBlockVersion(const CBlockIndex* pindexPrev, const Consensus::Params& params, std::array<ThresholdConditionCache, Consensus::MAX_VERSION_BITS_DEPLOYMENTS>& caches)
 {
     int32_t nVersion = VERSIONBITS_TOP_BITS;
@@ -296,6 +333,10 @@ namespace {
 /**
  * Threshold condition checker that triggers when unknown versionbits are seen on the network.
  */
+// COMMENT HOUSE: Warnings: if blocks start voting for a bit this node does
+// NOT know about, then other nodes may be about to enforce a rule this node
+// does not understand. This checker watches for that so the node can warn its
+// owner to upgrade (CheckUnknownActivations() below).
 class WarningBitsConditionChecker : public AbstractThresholdConditionChecker
 {
 private:
