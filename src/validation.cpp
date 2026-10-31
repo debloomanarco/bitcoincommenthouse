@@ -5,6 +5,20 @@
 
 #include <bitcoin-build-config.h> // IWYU pragma: keep
 
+// COMMENT HOUSE: What is this file?
+// This is the heart of Bitcoin Core. It ties all the rules from earlier
+// files together and decides what this node believes is the real
+// blockchain. It is over 6,000 lines long, so do NOT read it from top to
+// bottom. Only a few important functions have COMMENT HOUSE notes. Search
+// for "COMMENT HOUSE" to jump between them, in this order:
+//   1. MemPoolAccept::PreChecks() and AcceptToMemoryPool():
+//        should a new, unconfirmed transaction enter the waiting room?
+//   2. CheckBlock():          the "context-free" checks on a whole block.
+//   3. Chainstate::ConnectBlock(): apply a block to the UTXO set, checking
+//                             every transaction against the coins it spends.
+//   4. Chainstate::ActivateBestChain(): pick the chain with the most work.
+//   5. CheckInputScripts():   signature and script checks (Phase 6).
+//   6. GetBlockSubsidy():     the block reward schedule (Phase 4).
 #include <validation.h>
 
 #include <arith_uint256.h>
@@ -769,6 +783,24 @@ private:
     }
 };
 
+// COMMENT HOUSE: PreChecks(), the list of checks a new transaction must
+// pass before it may enter the MEMPOOL (the "memory pool": the waiting room
+// of valid transactions that are not in a block yet; miners choose from it).
+// It reuses the functions from earlier files, roughly in this order:
+//   - CheckTransaction()  (consensus/tx_check.cpp): is it well formed?
+//   - IsStandardTx()      (policy/policy.cpp): does this node's policy allow
+//                         it?
+//   - CheckFinalTxAtTip() (uses IsFinalTx(), consensus/tx_verify.cpp): is it
+//                         still time-locked?
+//   - Is it already in the mempool, or already in the chain?
+//   - CheckSequenceLocksAtTip(): relative time locks.
+//   - Consensus::CheckTxInputs() (consensus/tx_verify.cpp): do its coins
+//                         exist and add up? This also works out its fee.
+//   - ValidateInputsStandardness(), IsWitnessStandard() (policy/policy.cpp)
+//   - CheckFeeRate():     does it pay a high enough fee per virtual byte?
+// Cheap checks come first, so that bad transactions are thrown out before
+// any slow work is done. Signatures are checked later, in
+// CheckInputScripts().
 bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
 {
     AssertLockHeld(cs_main);
@@ -1762,6 +1794,14 @@ PackageMempoolAcceptResult MemPoolAccept::AcceptPackage(const Package& package, 
 
 } // anon namespace
 
+// COMMENT HOUSE: AcceptToMemoryPool() ("ATMP") is the front door for a
+// single new transaction, whether it came from another node or from this
+// node's own wallet. It runs all the mempool checks (starting with
+// PreChecks() above) and returns whether the transaction was accepted, and
+// if not, why (in m_state, see consensus/validation.h).
+// If the transaction is rejected, any coins that were loaded into the cache
+// (coins.h) only to check it are removed again. Otherwise an attacker could
+// fill this node's memory by sending many invalid transactions.
 MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, const CTransactionRef& tx,
                                        int64_t accept_time, bool bypass_limits, bool test_accept)
 {
@@ -2046,6 +2086,11 @@ ValidationCache::ValidationCache(const size_t script_execution_cache_bytes, cons
  * which are matched. This is useful for checking blocks where we will likely never need the cache
  * entry again.
  */
+// COMMENT HOUSE: CheckInputScripts() runs each input's unlocking script
+// against the locking script of the coin it spends. This is where digital
+// signatures are actually checked, which is why it is slow and runs only
+// after the cheap checks have passed. How scripts and signatures work is
+// explained in Phases 5 and 6 (key.cpp, script/interpreter.cpp).
 bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
                        const CCoinsViewCache& inputs, script_verify_flags flags, CheckInputScriptsFor check_for,
                        bool cacheSigStore,
@@ -2365,6 +2410,26 @@ script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
 /** Apply the effects of this block (with given index) on the UTXO set represented by coins.
  *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
  *  can fail if those validity checks fail (among other reasons). */
+// COMMENT HOUSE: ConnectBlock(), adding a block to the chain.
+// This applies the block's changes to the UTXO set ("view", a CCoinsViewCache
+// from coins.h): every coin spent is removed, and every new output is added.
+// Along the way it checks every rule that needs the UTXO set. If ANY rule is
+// broken, the whole block is rejected. Because the changes are made in a
+// cache, a rejected block leaves the real UTXO set untouched.
+// The main steps, marked with COMMENT HOUSE notes below:
+//   1. CheckBlock():        the context-free checks.
+//   2. For each transaction, in order:
+//        - CheckTxInputs(): its coins exist and add up, and its fee.
+//        - SequenceLocks(): relative time locks.
+//        - count signature operations (limit per block).
+//        - CheckInputScripts(): check the signatures.
+//        - UpdateCoins():   spend its inputs and add its outputs.
+//   3. The coinbase may not pay itself more than reward + fees.
+//   4. Record this block as the newest one the UTXO set matches.
+// Transactions are handled in order because a later transaction in the same
+// block may spend an output created by an earlier one.
+// pindex is this block's entry in the block index (see chain.h). If
+// fJustCheck is true, the block is only tested and nothing is kept.
 bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, CBlockIndex* pindex,
                                CCoinsViewCache& view, bool fJustCheck)
 {
@@ -2390,6 +2455,8 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     // is enforced in ContextualCheckBlockHeader(); we wouldn't want to
     // re-enforce that rule here (at least until we make it impossible for
     // the clock to go backward).
+    // COMMENT HOUSE: Step 1: run the context-free block checks (CheckBlock(),
+    // further down in this file).
     if (!CheckBlock(block, state, params.GetConsensus(), !fJustCheck, !fJustCheck)) {
         if (state.GetResult() == BlockValidationResult::BLOCK_MUTATED) {
             // We don't write down blocks to disk if they may have been
@@ -2472,6 +2539,10 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     // Now that the whole chain is irreversibly beyond that time it is applied to all blocks except the
     // two in the chain that violate it. This prevents exploiting the issue against nodes during their
     // initial block download.
+    // COMMENT HOUSE: BIP 30: a historical detail. In 2010 two pairs of coinbase
+    // transactions were exactly identical, so they had the same txid, and the
+    // second one overwrote the first. BIP 30 and BIP 34 made sure this can never
+    // happen again. You can skip this part.
     bool fEnforceBIP30 = !IsBIP30Repeat(*pindex);
 
     // Once BIP34 activated it was not possible to create new duplicate coinbases and thus other than starting
@@ -2598,12 +2669,18 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         if (!state.IsValid()) break;
         const CTransaction &tx = *(block.vtx[i]);
 
+        // COMMENT HOUSE: Step 2: this loop goes through every transaction in the
+        // block, in order. The coinbase (i == 0) has no real inputs, so it skips the
+        // input checks.
         nInputs += tx.vin.size();
 
         if (!tx.IsCoinBase())
         {
             CAmount txfee = 0;
             TxValidationState tx_state;
+            // COMMENT HOUSE: The coins must exist and add up, and the fee is worked out
+            // (consensus/tx_verify.cpp). The fees of all transactions are added to
+            // nFees, because the miner is allowed to collect them in the coinbase.
             if (!Consensus::CheckTxInputs(tx, tx_state, view, pindex->nHeight, txfee)) {
                 // Any transaction validation failure in ConnectBlock is a block consensus failure
                 state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
@@ -2626,6 +2703,8 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
                 prevheights[j] = view.AccessCoin(tx.vin[j].prevout).nHeight;
             }
 
+            // COMMENT HOUSE: Relative time locks (BIP 68, see consensus/tx_verify.cpp)
+            // must be over.
             if (!SequenceLocks(tx, nLockTimeFlags, prevheights, *pindex)) {
                 state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-nonfinal",
                               "contains a non-BIP68-final transaction " + tx.GetHash().ToString());
@@ -2637,6 +2716,8 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         // * legacy (always)
         // * p2sh (when P2SH enabled in flags and excludes coinbase)
         // * witness (when witness enabled in flags and excludes coinbase)
+        // COMMENT HOUSE: Add up the signature operations of the whole block. Too many
+        // would make the block too slow to check (see consensus/tx_verify.cpp).
         nSigOpsCost += GetTransactionSigOpCost(tx, view, flags);
         if (nSigOpsCost > MAX_BLOCK_SIGOPS_COST) {
             state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "too many sigops");
@@ -2669,6 +2750,10 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         if (i > 0) {
             blockundo.vtxundo.emplace_back();
         }
+        // COMMENT HOUSE: UpdateCoins() spends this transaction's inputs and adds its
+        // outputs to the UTXO set. The spent coins are saved as "undo data"
+        // (blockundo), so the block can be disconnected later if a longer chain
+        // appears (a "reorg").
         UpdateCoins(tx, view, i == 0 ? undoDummy : blockundo.vtxundo.back(), pindex->nHeight);
     }
     const auto time_3{SteadyClock::now()};
@@ -2679,6 +2764,9 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
              Ticks<SecondsDouble>(m_chainman.time_connect),
              Ticks<MillisecondsDouble>(m_chainman.time_connect) / m_chainman.num_blocks_total);
 
+    // COMMENT HOUSE: Step 3: the coinbase may pay out at most the block subsidy
+    // (new coins, see GetBlockSubsidy()) plus all the fees in the block. This
+    // is the rule that stops miners from creating more bitcoin than allowed.
     CAmount blockReward = nFees + GetBlockSubsidy(pindex->nHeight, params.GetConsensus());
     if (block.vtx[0]->GetValueOut() > blockReward && state.IsValid()) {
         state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
@@ -2723,6 +2811,8 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     }
 
     // add this block to the view's block chain
+    // COMMENT HOUSE: Step 4: everything passed. The UTXO set now matches the
+    // state after this block.
     view.SetBestBlock(pindex->GetBlockHash());
 
     const auto time_6{SteadyClock::now()};
@@ -3401,6 +3491,21 @@ static void LimitValidationInterfaceQueue(ValidationSignals& signals) LOCKS_EXCL
     }
 }
 
+// COMMENT HOUSE: ActivateBestChain(), choosing the real chain.
+// Sometimes two miners find a block at almost the same moment, and for a
+// while there are two competing chains. Every node follows the same rule to
+// decide between them: the chain with the most total proof-of-work (the most
+// mining effort) wins. This is often called the "longest chain rule", though
+// it really counts work, not blocks.
+// This function finds the most-work chain the node knows about
+// (FindMostWorkChain()) and moves to it step by step
+// (ActivateBestChainStep()). If the new chain branches off from an older
+// block, blocks are disconnected back to that point (using their undo data)
+// and the new chain's blocks are connected with ConnectBlock(). If a block
+// on the new chain turns out to be invalid, that chain is marked invalid and
+// the node tries again with the next best one.
+// Locks (LOCK, cs_main, m_chainstate_mutex) stop different parts of the
+// program from changing the chain at the same time.
 bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<const CBlock> pblock)
 {
     AssertLockNotHeld(m_chainstate_mutex);
@@ -3996,6 +4101,18 @@ static bool CheckWitnessMalleation(const CBlock& block, bool expect_witness_comm
     return true;
 }
 
+// COMMENT HOUSE: CheckBlock(), checks on a block by itself.
+// Like CheckTransaction() for transactions, these checks need no context:
+// not the UTXO set, nor the blocks before it. In order:
+//   1. The header is valid, especially its proof-of-work (pow.cpp, Phase 4).
+//   2. The merkle root in the header matches the transactions
+//      (consensus/merkle.cpp), and the duplicate trick is not used.
+//   3. The block is not too big.
+//   4. The FIRST transaction is a coinbase, and NO other one is.
+//   5. Every transaction passes CheckTransaction() (consensus/tx_check.cpp).
+//   6. It does not have too many signature operations.
+// If it passes, fChecked (see primitives/block.h) remembers that, so the
+// checks are not repeated.
 bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW, bool fCheckMerkleRoot)
 {
     // These are checks that are independent of context.
