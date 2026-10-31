@@ -1560,9 +1560,10 @@ static bool HandleMissingData(MissingDataBehavior mdb)
 
 // COMMENT HOUSE: SignatureHashSchnorr() (Phase 8), what a Taproot signature
 // signs (BIP 341). It plays the same role as SignatureHash() further down,
-// but with a cleaner recipe. It ALWAYS covers the amounts and locking scripts
-// of EVERY coin being spent, not just this one. That way a wallet can be sure
-// of the exact fee even if it only signs one input. The parts are fed into a
+// but with a cleaner recipe. Unless SIGHASH_ANYONECANPAY is used, it covers
+// the amounts and locking scripts of EVERY coin being spent, not just this
+// one. That way a wallet can be sure of the exact fee even if it only signs
+// one input. The parts are fed into a
 // TaggedHash("TapSighash") (see hash.h). ext_flag tells apart a key path
 // spend (0) from a script path spend (1).
 template<typename T>
