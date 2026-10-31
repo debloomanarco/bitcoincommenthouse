@@ -3,6 +3,9 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// It announces the PROOF-OF-WORK functions, whose code is in pow.cpp. Read
+// pow.cpp for the full explanation of mining, the target and difficulty.
 #ifndef BITCOIN_POW_H
 #define BITCOIN_POW_H
 
@@ -24,12 +27,18 @@ class arith_uint256;
  * @return              the proof-of-work target or nullopt if the nBits value
  *                      is invalid (due to overflow or exceeding pow_limit)
  */
+// COMMENT HOUSE: DeriveTarget() unpacks the compact nBits number from the
+// block header into the full 256-bit target.
 std::optional<arith_uint256> DeriveTarget(unsigned int nBits, uint256 pow_limit);
 
+// COMMENT HOUSE: These two work out what nBits (difficulty) the NEXT block
+// must use.
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params&);
 unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nFirstBlockTime, const Consensus::Params&);
 
 /** Check whether a block hash satisfies the proof-of-work requirement specified by nBits */
+// COMMENT HOUSE: CheckProofOfWork() checks that a block's hash is at or below
+// its target, which means the miner really did the work.
 bool CheckProofOfWork(uint256 hash, unsigned int nBits, const Consensus::Params&);
 bool CheckProofOfWorkImpl(uint256 hash, unsigned int nBits, const Consensus::Params&);
 
