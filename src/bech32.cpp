@@ -3,6 +3,30 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// BECH32, the address format introduced with SegWit (BIP 173), used by
+// addresses that start with "bc1". An address is just a friendly way of
+// writing a locking script so people can copy and type it safely.
+// A bech32 address has three parts:
+//   - the "human-readable part" (hrp): "bc" on mainnet, "tb" on testnet
+//     (bech32_hrp in kernel/chainparams.cpp),
+//   - the separator "1",
+//   - the data, written with a 32-letter alphabet, ending in a 6-character
+//     CHECKSUM.
+// For example, in bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq the "q" after
+// "bc1" means SegWit version 0.
+// The checksum is the clever part. It is calculated from all the other
+// characters, so a typing mistake almost certainly makes the address
+// invalid instead of sending money to the wrong place. It is GUARANTEED to
+// catch up to 4 wrong characters, and can even point out where the mistakes
+// are (LocateErrors() below).
+// There are two versions:
+//   - Bech32 (BIP 173), for SegWit version 0 ("bc1q...").
+//   - Bech32m (BIP 350), for version 1 and above, such as Taproot
+//     ("bc1p..."). It fixes a small weakness found in the original.
+// They differ only in one constant (EncodingConstant() below).
+// The maths behind the checksum (polynomials over "finite fields") is
+// advanced. You do not need it to understand how the format is used.
 #include <bech32.h>
 #include <util/vector.h>
 
@@ -19,9 +43,15 @@ namespace
 typedef std::vector<uint8_t> data;
 
 /** The Bech32 and Bech32m character set for encoding. */
+// COMMENT HOUSE: The 32 characters used, each standing for a 5-bit value from
+// 0 to 31. The characters "1", "b", "i" and "o" are left out because they are
+// easy to confuse with "l", "6", "j" and "0". Addresses are all lowercase (or
+// all uppercase), so the case of a letter never matters.
 const char* CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
 /** The Bech32 and Bech32m character set for decoding. */
+// COMMENT HOUSE: The reverse table: from a character back to its 5-bit value.
+// -1 means "not an allowed character".
 const int8_t CHARSET_REV[128] = {
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -42,6 +72,8 @@ const int8_t CHARSET_REV[128] = {
  * Conversely, GF1024_LOG contains the discrete logarithms of these powers, so
  * GF1024_LOG[GF1024_EXP[k]] == k.
  * The following function generates the two tables GF1024_EXP and GF1024_LOG as constexprs. */
+// COMMENT HOUSE: You can skip from here to CheckCharacters(). These are maths
+// tables used only to find the position of typing mistakes.
 constexpr std::pair<std::array<int16_t, 1023>, std::array<int16_t, 1024>> GenerateGFTables()
 {
     // Build table for GF(32).
@@ -118,6 +150,8 @@ constexpr const std::array<int16_t, 1023>& GF1024_EXP = tables.first;
 constexpr const std::array<int16_t, 1024>& GF1024_LOG = tables.second;
 
 /* Determine the final constant to use for the specified encoding. */
+// COMMENT HOUSE: The only difference between Bech32 and Bech32m: the number
+// the checksum must work out to (1 for Bech32, 0x2bc830a3 for Bech32m).
 uint32_t EncodingConstant(Encoding encoding) {
     assert(encoding == Encoding::BECH32 || encoding == Encoding::BECH32M);
     return encoding == Encoding::BECH32 ? 1 : 0x2bc830a3;
@@ -126,6 +160,9 @@ uint32_t EncodingConstant(Encoding encoding) {
 /** This function will compute what 6 5-bit values to XOR into the last 6 input values, in order to
  *  make the checksum 0. These 6 values are packed together in a single 30-bit integer. The higher
  *  bits correspond to earlier values. */
+// COMMENT HOUSE: PolyMod() is the checksum calculation itself. It mixes every
+// 5-bit value into a 30-bit result, in a way that guarantees small typing
+// mistakes always change the result.
 uint32_t PolyMod(const data& v)
 {
     // The input is interpreted as a list of coefficients of a polynomial over F = GF(32), with an
@@ -323,6 +360,9 @@ std::vector<unsigned char> PreparePolynomialCoefficients(const std::string& hrp,
 }
 
 /** Verify a checksum. */
+// COMMENT HOUSE: Check an address: run PolyMod() over the hrp and all the
+// data, including the checksum. A correct address gives exactly the Bech32
+// or Bech32m constant. Anything else means there is a mistake.
 Encoding VerifyChecksum(const std::string& hrp, const data& values)
 {
     // PolyMod computes what value to xor into the final values to make the checksum 0. However,
@@ -338,6 +378,9 @@ Encoding VerifyChecksum(const std::string& hrp, const data& values)
 }
 
 /** Create a checksum. */
+// COMMENT HOUSE: Make a checksum: run PolyMod() with six zeros where the
+// checksum will go, then choose the six values that make the result come out
+// to the right constant.
 data CreateChecksum(Encoding encoding, const std::string& hrp, const data& values)
 {
     auto enc = PreparePolynomialCoefficients(hrp, values);
@@ -354,6 +397,8 @@ data CreateChecksum(Encoding encoding, const std::string& hrp, const data& value
 } // namespace
 
 /** Encode a Bech32 or Bech32m string. */
+// COMMENT HOUSE: Encode(): build the address text: hrp + "1" + the data
+// characters + the 6 checksum characters.
 std::string Encode(Encoding encoding, const std::string& hrp, const data& values) {
     // First ensure that the HRP is all lowercase. BIP-173 and BIP350 require an encoder
     // to return a lowercase Bech32/Bech32m string, but if given an uppercase HRP, the
@@ -370,6 +415,10 @@ std::string Encode(Encoding encoding, const std::string& hrp, const data& values
 }
 
 /** Decode a Bech32 or Bech32m string. */
+// COMMENT HOUSE: Decode(): the reverse. Check that the characters are allowed
+// and the length is sensible, split the text at the LAST "1", turn the
+// characters back into values, and verify the checksum. If anything is
+// wrong, it returns an empty result, and the address is rejected.
 DecodeResult Decode(const std::string& str, CharLimit limit) {
     std::vector<int> errors;
     if (!CheckCharacters(str, errors)) return {};
@@ -399,6 +448,9 @@ DecodeResult Decode(const std::string& str, CharLimit limit) {
 }
 
 /** Find index of an incorrect character in a Bech32 string. */
+// COMMENT HOUSE: LocateErrors() goes one step further: if an address is
+// wrong, it tries to work out WHICH characters are wrong, so a wallet can
+// highlight them. This uses the maths tables from above.
 std::pair<std::string, std::vector<int>> LocateErrors(const std::string& str, CharLimit limit) {
     std::vector<int> error_locations{};
 
