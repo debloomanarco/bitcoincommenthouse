@@ -3,6 +3,20 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// It lists the SETTINGS of the Bitcoin protocol: how often blocks should
+// come, when the block reward halves, when each rule upgrade switched on,
+// and so on. Every node must use exactly the same settings, or nodes would
+// disagree about which blocks are valid. That is why they are "consensus"
+// parameters.
+//
+// This file only describes the list of settings (the Params struct). The
+// actual numbers for the real Bitcoin network, and for the test networks,
+// are filled in by kernel/chainparams.cpp.
+//
+// A word you will see a lot here: "BIP" means Bitcoin Improvement Proposal,
+// a numbered public document describing a change to Bitcoin. For example,
+// BIP 141 is SegWit.
 #ifndef BITCOIN_CONSENSUS_PARAMS_H
 #define BITCOIN_CONSENSUS_PARAMS_H
 
@@ -16,6 +30,9 @@
 #include <map>
 #include <vector>
 
+// COMMENT HOUSE: A namespace is a "family name" for code. Everything inside is
+// written in full as Consensus::Params, Consensus::BIP9Deployment and so on,
+// so these names cannot clash with names elsewhere.
 namespace Consensus {
 
 /**
@@ -23,6 +40,19 @@ namespace Consensus {
  * the client implementation long after the consensus change has activated. See BIP 90.
  * Consensus changes for which the new rules are enforced from genesis are not listed here.
  */
+// COMMENT HOUSE: Upgrades to Bitcoin's rules are called "deployments".
+// Once an upgrade has been active for years, its exact switch-on block
+// number (its "height") is simply written into the code. The upgrade is then
+// called "buried", because it is buried deep in the chain's history.
+// These are the buried ones:
+//   - HEIGHTINCB (BIP 34): each block's coinbase must contain its height.
+//   - CLTV (BIP 65):       coins can be locked until a certain time or block.
+//   - DERSIG (BIP 66):     signatures must use one strict, standard format.
+//   - CSV (BIP 68, 112, 113): coins can be locked for a period of time after
+//                          they are received ("relative" time locks).
+//   - SEGWIT (BIP 141):    Segregated Witness (covered in a later phase).
+// An enum is a list of named values. They start at the smallest number an
+// int16_t can hold, so they can never be confused with DeploymentPos below.
 enum BuriedDeployment : int16_t {
     // buried deployments get negative values to avoid overlap with DeploymentPos
     DEPLOYMENT_HEIGHTINCB = std::numeric_limits<int16_t>::min(),
@@ -35,6 +65,11 @@ enum BuriedDeployment : int16_t {
 };
 constexpr bool ValidDeployment(BuriedDeployment dep) { return dep <= DEPLOYMENT_SEGWIT; }
 
+// COMMENT HOUSE: Upgrades that are NOT buried, and still use the signalling
+// process described below (BIP9Deployment). Right now there is only
+// TESTDUMMY, a fake upgrade used to test the process.
+// MAX_VERSION_BITS_DEPLOYMENTS is not a real upgrade. It is a trick: because
+// enum values count up from 0, it equals the number of entries before it.
 enum DeploymentPos : uint16_t {
     DEPLOYMENT_TESTDUMMY,
     // NOTE: Also add new deployments to VersionBitsDeploymentInfo in deploymentinfo.cpp
@@ -46,6 +81,13 @@ constexpr bool ValidDeployment(DeploymentPos dep) { return dep < MAX_VERSION_BIT
 /**
  * Struct for each individual consensus rule change using BIP9.
  */
+// COMMENT HOUSE: BIP9Deployment, how miners vote on a new rule (BIP 9).
+// Miners signal "I'm ready for this upgrade" by setting one bit (one
+// on/off switch) in the nVersion field of the block header. Blocks are
+// counted in groups of 2016 (about two weeks). If enough blocks in one
+// group signal (by default 1916 of 2016, which is 95%), the upgrade "locks
+// in" and switches on shortly after. If that never happens before nTimeout,
+// the attempt fails.
 struct BIP9Deployment {
     /** Bit position to select the particular bit in nVersion. */
     int bit{28};
@@ -85,6 +127,24 @@ struct BIP9Deployment {
 /**
  * Parameters that influence chain consensus.
  */
+// COMMENT HOUSE: Params, the full list of protocol settings.
+// The most important ones for beginners:
+//   - hashGenesisBlock:        the hash of the very first block.
+//   - nSubsidyHalvingInterval: how many blocks between reward halvings
+//                              (210,000 on the real network, about 4 years).
+//   - BIP34Height ... SegwitHeight: the block heights where each buried
+//                              upgrade (see BuriedDeployment) switched on.
+//   - powLimit:                the EASIEST difficulty ever allowed.
+//   - nPowTargetSpacing:       the target time between blocks (10 minutes).
+//   - nPowTargetTimespan:      how often difficulty is adjusted (2 weeks).
+//   - nMinimumChainWork:       a safety check: a chain with less total
+//                              mining work than this is ignored, so a
+//                              new node cannot be fooled by a short fake
+//                              chain.
+//   - defaultAssumeValid:      a known-good block. To save time, a new node
+//                              skips checking SIGNATURES in blocks before
+//                              it, but still checks every other rule.
+// Mining and difficulty are explained in pow.cpp, a later phase.
 struct Params {
     uint256 hashGenesisBlock;
     int nSubsidyHalvingInterval;
@@ -127,6 +187,8 @@ struct Params {
     {
         return std::chrono::seconds{nPowTargetSpacing};
     }
+    // COMMENT HOUSE: How many blocks between difficulty adjustments: two weeks
+    // divided by 10 minutes = 2016 blocks.
     int64_t DifficultyAdjustmentInterval() const { return nPowTargetTimespan / nPowTargetSpacing; }
     /** The best chain should have at least this much work */
     uint256 nMinimumChainWork;
@@ -140,6 +202,8 @@ struct Params {
     bool signet_blocks{false};
     std::vector<uint8_t> signet_challenge;
 
+    // COMMENT HOUSE: Given a buried upgrade's name, returns the block height where
+    // it switched on. A "switch" statement picks one "case" based on a value.
     int DeploymentHeight(BuriedDeployment dep) const
     {
         switch (dep) {
