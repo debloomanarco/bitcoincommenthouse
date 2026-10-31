@@ -4,6 +4,23 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// This file describes PUBLIC keys, the shareable half of a key pair (see
+// key.h for private keys and the big picture). A public key is a point on
+// the secp256k1 curve: a pair of very large numbers, x and y. Its main job is
+// to VERIFY signatures: to check that a signature was made by the matching
+// private key, without ever knowing that private key.
+//
+// The main pieces:
+//   - CKeyID:      a short (20-byte) fingerprint of a public key, used in
+//                  classic Bitcoin addresses.
+//   - CPubKey:     a public key, used for ECDSA signatures.
+//   - XOnlyPubKey: the 32-byte public key form used by Taproot (Phase 8).
+// The rest (EllSwiftPubKey, CExtPubKey) is for encrypted connections and
+// wallets. You can skip it.
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_PUBKEY_H
 #define BITCOIN_PUBKEY_H
 
@@ -25,6 +42,11 @@ inline constexpr unsigned int BIP32_EXTKEY_WITH_VERSION_SIZE = 78;
 using KeyFingerprint = std::array<unsigned char, 4>;
 
 /** A reference to a CKey: the Hash160 of its serialized public key */
+// COMMENT HOUSE: CKeyID, the Hash160 of a public key (SHA-256 then
+// RIPEMD-160, see hash.h), which is 20 bytes. A classic address beginning
+// with "1" is basically this fingerprint written in a friendly form. Locking
+// coins to the hash, instead of the key itself, makes addresses shorter. It
+// also keeps the actual public key hidden until the coins are spent.
 class CKeyID : public uint160
 {
 public:
@@ -39,6 +61,15 @@ public:
 };
 
 /** An encapsulated public key. */
+// COMMENT HOUSE: CPubKey, a public key, stored in one of two forms:
+//   - uncompressed, 65 bytes: the byte 0x04, then x (32 bytes), then
+//     y (32 bytes).
+//   - compressed, 33 bytes: the byte 0x02 or 0x03, then only x. For any x
+//     there are just two possible y values on the curve, one even and one
+//     odd. So 02 means "the even one" and 03 means "the odd one", and y can
+//     be worked out again when needed.
+// Almost all keys today are compressed. A DER signature (see key.cpp) is up
+// to 72 bytes (SIGNATURE_SIZE).
 class CPubKey
 {
 public:
@@ -66,6 +97,9 @@ private:
     unsigned char vch[SIZE];
 
     //! Compute the length of a pubkey with a given first byte.
+    // COMMENT HOUSE: The first byte tells you the length: 02 or 03 means
+    // compressed (33 bytes), and 04 means uncompressed (65 bytes). 06 and 07 are
+    // an old, unusual "hybrid" form.
     unsigned int static GetLen(unsigned char chHeader)
     {
         if (chHeader == 2 || chHeader == 3)
@@ -166,6 +200,7 @@ public:
     }
 
     //! Get the KeyID of this public key (hash of its serialization)
+    // COMMENT HOUSE: GetID() gives this key's 20-byte fingerprint (Hash160).
     CKeyID GetID() const
     {
         return CKeyID(Hash160(std::span{vch}.first(size())));
@@ -191,6 +226,9 @@ public:
      *
      * Note that this is consensus critical as CheckECDSASignature() calls it!
      */
+    // COMMENT HOUSE: IsValid() only checks that the key has a sensible length. It
+    // does NOT check that the point is actually on the curve. IsFullyValid() does
+    // that, but it is slower.
     bool IsValid() const
     {
         return size() > 0;
@@ -215,11 +253,18 @@ public:
      * Verify a DER signature (~72 bytes).
      * If this public key is not fully valid, the return value will be false.
      */
+    // COMMENT HOUSE: Verify(), the most important function here: does vchSig
+    // prove that the owner of the matching private key signed this hash? It
+    // returns true or false. The code is in pubkey.cpp.
     bool Verify(const uint256& hash, const std::vector<unsigned char>& vchSig) const;
 
     /**
      * Check whether a signature is normalized (lower-S).
      */
+    // COMMENT HOUSE: For every valid signature there is a "twin" with a different
+    // S value (see SigHasLowR() in key.cpp) that is also valid. That would let
+    // someone change a transaction's bytes, and so its txid, without the owner's
+    // permission. To prevent that, policy only accepts the "low S" twin.
     static bool CheckLowS(const std::vector<unsigned char>& vchSig);
 
     //! Recover a public key from a compact signature.
@@ -232,6 +277,11 @@ public:
     [[nodiscard]] bool Derive(CPubKey& pubkeyChild, ChainCode &ccChild, unsigned int nChild, const ChainCode& cc, uint256* bip32_tweak_out = nullptr) const;
 };
 
+// COMMENT HOUSE: XOnlyPubKey, a 32-byte public key that stores ONLY x.
+// Taproot (BIP 340/341) always picks the version of a point with an even y,
+// so even the 02/03 byte is unnecessary. These keys verify Schnorr
+// signatures, and can be "tweaked" to hide a tree of spending scripts inside
+// them. All of this is explained in Phase 8.
 class XOnlyPubKey
 {
 private:
@@ -268,6 +318,8 @@ public:
      *
      * sigbytes must be exactly 64 bytes.
      */
+    // COMMENT HOUSE: Checks a 64-byte Schnorr signature. Same idea as
+    // CPubKey::Verify(), but for the newer signature type.
     bool VerifySchnorr(const uint256& msg, std::span<const unsigned char> sigbytes) const;
 
     /** Compute the Taproot tweak as specified in BIP341, with *this as internal
@@ -278,6 +330,7 @@ public:
      * Note that the behavior of this function with merkle_root != nullptr is
      * consensus critical.
      */
+    // COMMENT HOUSE: The Taproot "tweak" functions. Phase 8 explains them.
     uint256 ComputeTapTweakHash(const uint256* merkle_root) const;
 
     /** Verify that this is a Taproot tweaked output point, against a specified internal key,
@@ -342,6 +395,8 @@ public:
     }
 };
 
+// COMMENT HOUSE: CExtPubKey, an extended public key (BIP 32) used by wallets
+// to create child public keys. You can skip it.
 struct CExtPubKey {
     unsigned char version[4];
     unsigned char nDepth;
