@@ -3,6 +3,15 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// This is where a node TALKS to other nodes (its "peers"). Every message
+// that arrives from the network, such as "here is a new transaction", "here
+// is a block" or "what blocks do you have?", is handled here, in
+// ProcessMessage(). The node then hands the content to validation
+// (validation.cpp) to check it against the rules.
+// The README marks networking as "later or never" for beginners. This file
+// is very large and only the part that changed in the 2026-10-31 upstream
+// update has a COMMENT HOUSE note. Search for "wtxidrelay" to find it.
 #include <net_processing.h>
 
 #include <addrman.h>
@@ -285,6 +294,9 @@ struct Peer {
     std::atomic<bool> m_ping_queued{false};
 
     /** Whether this peer relays txs via wtxid */
+    // COMMENT HOUSE: m_wtxid_relay: has this peer agreed to announce transactions
+    // by their wtxid (witness transaction ID, see primitives/transaction.cpp)
+    // instead of their txid? It is set by the wtxidrelay message (BIP 339).
     std::atomic<bool> m_wtxid_relay{false};
     /** The feerate in the most recent BIP133 `feefilter` message sent to the peer.
      *  It is *not* a p2p protocol violation for the peer to send us
@@ -4187,6 +4199,21 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
 
     // BIP339 defines feature negotiation of wtxidrelay, which must happen between
     // VERSION and VERACK to avoid relay problems from switching after a connection is up.
+    // COMMENT HOUSE: The "wtxidrelay" message (BIP 339). When two nodes first
+    // connect, they exchange VERSION and VERACK messages, like a handshake. In
+    // between, a node may send "wtxidrelay" to say "let's name transactions by
+    // their wtxid". The wtxid covers the witness too, so two versions of a
+    // transaction with different witness data get different names. That stops a
+    // peer from blocking a valid transaction by first sending a copy with a
+    // broken witness, which has the same txid.
+    //   - If the message arrives AFTER the handshake has finished, the peer is
+    //     disconnected, because changing this mid-conversation could cause
+    //     problems.
+    //   - Otherwise, if both nodes are new enough, the peer is marked with
+    //     m_wtxid_relay = true.
+    // Upstream change (2026-10-31): this used to also count how many peers use
+    // wtxid relay (m_wtxid_relay_peers). Nothing used that count any more, so
+    // it was removed. Only the per-peer flag remains.
     if (msg_type == NetMsgType::WTXIDRELAY) {
         if (pfrom.fSuccessfullyConnected) {
             // Disconnect peers that send a wtxidrelay message after VERACK.
