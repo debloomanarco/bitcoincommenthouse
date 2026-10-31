@@ -2106,12 +2106,12 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
 //   4. If the lock is P2SH, the last item the scriptSig pushed is itself a
 //      script (the "redeem script"). It is run too, with the rest of the
 //      stack, and must also end with true.
-//   5. CLEANSTACK: for SegWit and P2SH, exactly one item may be left.
+//   5. CLEANSTACK (a policy flag): exactly one item may be left at the end.
 // Why run them separately instead of joining them into one script? The
-// developer comment mentions CVE-2010-5141: in 2010, joining them meant a
-// spender could add OP_RETURN-style tricks to their scriptSig that skipped
-// the lock entirely, and spend ANYONE's coins. Running them one after the
-// other on a shared stack fixed it.
+// developer comment mentions CVE-2010-5141: in 2010 they were joined, and
+// OP_RETURN then meant "stop here". A spender could end their scriptSig with
+// OP_1 OP_RETURN, so the lock was never run at all, and spend ANYONE's
+// coins. Running the two scripts separately on a shared stack fixed it.
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror)
 {
     static const CScriptWitness emptyWitness;
