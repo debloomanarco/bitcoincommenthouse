@@ -3,6 +3,13 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The code for helper functions announced in script/script.h (read that
+// first for opcodes, the stack and the P2PKH example). Most of these
+// functions read a script byte by byte to answer a question about it:
+// "how many signature checks could it need?", "is it P2SH?", "is it a
+// SegWit program?" and so on. The interpreter that RUNS scripts is in
+// script/interpreter.cpp.
 #include <script/script.h>
 
 #include <crypto/common.h>
@@ -14,8 +21,11 @@
 #include <compare>
 #include <string>
 
+// COMMENT HOUSE: A script's ID (used by P2SH) is the Hash160 of the script.
 CScriptID::CScriptID(const CScript& in) : BaseHash(Hash160(in)) {}
 
+// COMMENT HOUSE: GetOpName(): the readable name of an opcode, such as
+// "OP_DUP", used when printing scripts.
 std::string GetOpName(opcodetype opcode)
 {
     switch (opcode)
@@ -156,6 +166,10 @@ std::string GetOpName(opcodetype opcode)
     return "OP_UNKNOWN";
 }
 
+// COMMENT HOUSE: GetSigOpCount(): count the signature checks in a script
+// (see the sigops notes in consensus/tx_verify.cpp). OP_CHECKSIG counts 1.
+// OP_CHECKMULTISIG counts as the number of keys if it can tell (the OP_n
+// just before it, when fAccurate is true), otherwise the maximum, 20.
 unsigned int CScript::GetSigOpCount(bool fAccurate) const
 {
     unsigned int n = 0;
@@ -180,6 +194,9 @@ unsigned int CScript::GetSigOpCount(bool fAccurate) const
     return n;
 }
 
+// COMMENT HOUSE: For P2SH, the real script is hidden in the scriptSig (the
+// last thing it pushes, see VerifyScript() in script/interpreter.cpp). This
+// version pulls that script out and counts ITS signature checks.
 unsigned int CScript::GetSigOpCount(const CScript& scriptSig) const
 {
     if (!IsPayToScriptHash())
@@ -221,6 +238,12 @@ bool CScript::IsPayToAnchor(int version, const std::vector<unsigned char>& progr
         program[1] == 0x73;
 }
 
+// COMMENT HOUSE: Quick shape tests, done just by checking a few bytes:
+//   - P2SH:    23 bytes: OP_HASH160, push 20 (0x14), the hash, OP_EQUAL.
+//   - P2WSH:   34 bytes: OP_0, push 32 (0x20), the hash.
+//   - Taproot: 34 bytes: OP_1, push 32 (0x20), the key.
+//   - P2A:     4 bytes:  OP_1, push 2, 0x4e 0x73 (see the IsPayToAnchor()
+//              functions above).
 bool CScript::IsPayToScriptHash() const
 {
     // Extra-fast test for pay-to-script-hash CScripts:
@@ -247,6 +270,9 @@ bool CScript::IsPayToTaproot() const
 
 // A witness program is any valid CScript that consists of a 1-byte push opcode
 // followed by a data push between 2 and 40 bytes.
+// COMMENT HOUSE: IsWitnessProgram(): is this a SegWit output? It must be a
+// version opcode (OP_0 to OP_16), then ONE push of 2 to 40 bytes, and
+// nothing else. If so, it gives back the version number and the program.
 bool CScript::IsWitnessProgram(int& version, std::vector<unsigned char>& program) const
 {
     if (this->size() < 4 || this->size() > 42) {
@@ -263,6 +289,8 @@ bool CScript::IsWitnessProgram(int& version, std::vector<unsigned char>& program
     return false;
 }
 
+// COMMENT HOUSE: IsPushOnly(): does the script contain only data pushes (no
+// other instructions)? Required of standard scriptSigs.
 bool CScript::IsPushOnly(const_iterator pc) const
 {
     while (pc < end())
@@ -310,6 +338,15 @@ bool CScript::HasValidOps() const
     return true;
 }
 
+// COMMENT HOUSE: GetScriptOp(), reading ONE instruction. It is used by
+// everything that steps through a script, including the interpreter.
+//   - Read one byte: the opcode.
+//   - If it is a push, work out how much data follows: opcodes 1 to 75
+//     push that many bytes directly, and OP_PUSHDATA1/2/4 are followed by a
+//     1-, 2- or 4-byte length.
+//   - Copy the data out, and move pc past it.
+// It returns false if the script ends in the middle of an instruction, so
+// a broken script can never make it read past the end.
 bool GetScriptOp(CScriptBase::const_iterator& pc, CScriptBase::const_iterator end, opcodetype& opcodeRet, std::vector<unsigned char>* pvchRet)
 {
     opcodeRet = OP_INVALIDOPCODE;
@@ -362,6 +399,8 @@ bool GetScriptOp(CScriptBase::const_iterator& pc, CScriptBase::const_iterator en
     return true;
 }
 
+// COMMENT HOUSE: The list of unused opcode numbers that count as OP_SUCCESS in
+// Taproot scripts (see script/script.h and Phase 8).
 bool IsOpSuccess(const opcodetype& opcode)
 {
     return opcode == 80 || opcode == 98 || (opcode >= 126 && opcode <= 129) ||
@@ -370,6 +409,11 @@ bool IsOpSuccess(const opcodetype& opcode)
            (opcode >= 187 && opcode <= 254);
 }
 
+// COMMENT HOUSE: CheckMinimalPush(): was this data pushed in the SHORTEST
+// possible way? For example, the number 5 must use OP_5, not "push 1 byte:
+// 05". Since the same data could be pushed several ways, this stops anyone
+// from changing a transaction's bytes without changing its meaning
+// (malleability, see script/script_error.h).
 bool CheckMinimalPush(const std::vector<unsigned char>& data, opcodetype opcode) {
     // Excludes OP_1NEGATE, OP_1-16 since they are by definition minimal
     assert(0 <= opcode && opcode <= OP_PUSHDATA4);
