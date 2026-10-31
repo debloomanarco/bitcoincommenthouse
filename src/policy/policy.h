@@ -3,6 +3,17 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The NUMBERS behind this node's policy rules (policy/policy.cpp explains
+// consensus versus policy: the law versus a shop's own rules). Each is a
+// default setting that the node's owner can usually change with a
+// command-line option, the -name in each developer comment.
+// Fee settings below are in satoshis per 1,000 virtual bytes (sat/kvB), so
+// divide by 1,000 to get sat/vB (see policy/feerate.h). For example, 100
+// sat/kvB is 0.1 sat/vB.
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_POLICY_POLICY_H
 #define BITCOIN_POLICY_POLICY_H
 
@@ -22,6 +33,9 @@ class CFeeRate;
 class CScript;
 
 /** Default for -blockmaxweight, which controls the range of block weights the mining code will create **/
+// COMMENT HOUSE: Settings for building blocks (node/miner.cpp): how heavy a
+// block to make, how much space to keep free for the coinbase, and the
+// lowest fee rate a transaction must pay to be included.
 inline constexpr unsigned int DEFAULT_BLOCK_MAX_WEIGHT{MAX_BLOCK_WEIGHT};
 /** Default for -blockreservedweight **/
 inline constexpr unsigned int DEFAULT_BLOCK_RESERVED_WEIGHT{8000};
@@ -35,6 +49,14 @@ inline constexpr unsigned int MINIMUM_BLOCK_RESERVED_WEIGHT{2000};
 /** Default for -blockmintxfee, which sets the minimum feerate for a transaction in blocks created by mining code **/
 inline constexpr unsigned int DEFAULT_BLOCK_MIN_TX_FEE{1};
 /** The maximum weight for transactions we're willing to relay/mine */
+// COMMENT HOUSE: Size limits for one standard transaction:
+//   - at most 400,000 weight units, a tenth of a block, so no single
+//     transaction can hog a block or be very slow to check.
+//   - at least 65 bytes without the witness. A 64-byte transaction could be
+//     confused with a pair of hashes inside a merkle tree
+//     (consensus/merkle.cpp), which can be used to trick lightweight
+//     wallets.
+//   - limits on signature operations (see consensus/tx_verify.cpp).
 inline constexpr int32_t MAX_STANDARD_TX_WEIGHT{400'000};
 /** The minimum non-witness size for transactions we're willing to relay/mine: one larger than 64  */
 inline constexpr unsigned int MIN_STANDARD_TX_NONWITNESS_SIZE{65};
@@ -45,12 +67,16 @@ inline constexpr unsigned int MAX_STANDARD_TX_SIGOPS_COST{MAX_BLOCK_SIGOPS_COST/
 /** The maximum number of potentially executed legacy signature operations in a single standard tx */
 inline constexpr unsigned int MAX_TX_LEGACY_SIGOPS{2'500};
 /** Default for -incrementalrelayfee, which sets the minimum feerate increase for mempool limiting or replacement **/
+// COMMENT HOUSE: When a transaction is replaced, or the mempool is full, the
+// new transaction must pay at least this much more: 0.1 sat/vB.
 inline constexpr unsigned int DEFAULT_INCREMENTAL_RELAY_FEE{100};
 /** Default for -bytespersigop */
 inline constexpr unsigned int DEFAULT_BYTES_PER_SIGOP{20};
 /** Default for -permitbaremultisig */
 inline constexpr bool DEFAULT_PERMIT_BAREMULTISIG{true};
 /** The maximum number of witness stack items in a standard P2WSH script */
+// COMMENT HOUSE: Limits on witness data and scriptSigs for standard spends.
+// Larger ones are allowed by consensus, but this node will not relay them.
 inline constexpr unsigned int MAX_STANDARD_P2WSH_STACK_ITEMS{100};
 /** The maximum size in bytes of each witness stack item in a standard P2WSH script */
 inline constexpr unsigned int MAX_STANDARD_P2WSH_STACK_ITEM_SIZE{80};
@@ -65,10 +91,21 @@ inline constexpr unsigned int MAX_STANDARD_SCRIPTSIG_SIZE{1650};
  * standard and should be done with care and ideally rarely. It makes sense to
  * only increase the dust limit after prior releases were already not creating
  * outputs below the new threshold */
+// COMMENT HOUSE: Dust (see GetDustThreshold() in policy/policy.cpp) is judged
+// at 3,000 sat/kvB = 3 sat/vB.
 inline constexpr unsigned int DUST_RELAY_TX_FEE{3000};
 /** Default for -minrelaytxfee, minimum relay fee for transactions */
+// COMMENT HOUSE: The lowest fee rate this node will accept into its mempool
+// and pass on: 0.1 sat/vB. Transactions paying less are ignored, which makes
+// flooding the network with junk cost money.
 inline constexpr unsigned int DEFAULT_MIN_RELAY_TX_FEE{100};
 /** Maximum number of transactions per cluster (default) */
+// COMMENT HOUSE: Limits on groups of related unconfirmed transactions. If B
+// spends an output of A, and both are in the mempool, they are related.
+// A "cluster" is a whole group of related transactions (at most 64, and
+// about 101,000 vB). Ancestors are the transactions a transaction depends
+// on, and descendants are the ones that depend on it. Huge groups would make
+// the mempool slow to manage.
 inline constexpr unsigned int DEFAULT_CLUSTER_LIMIT{64};
 /** Maximum size of cluster in virtual kilobytes */
 inline constexpr unsigned int DEFAULT_CLUSTER_SIZE_LIMIT_KVB{101};
@@ -77,6 +114,9 @@ inline constexpr unsigned int DEFAULT_ANCESTOR_LIMIT{25};
 /** Default for -limitdescendantcount, max number of in-mempool descendants */
 inline constexpr unsigned int DEFAULT_DESCENDANT_LIMIT{25};
 /** Default for -datacarrier */
+// COMMENT HOUSE: "Data carrier" outputs are OP_RETURN outputs that just store
+// data. By default this node relays them, up to 100,000 vB in total per
+// transaction (MAX_STANDARD_TX_WEIGHT / 4).
 inline constexpr bool DEFAULT_ACCEPT_DATACARRIER = true;
 /**
  * Default setting for -datacarriersize in vbytes.
@@ -95,6 +135,14 @@ inline constexpr unsigned int MAX_DUST_OUTPUTS_PER_TX{1};
  * Note that this does not affect consensus validity; see GetBlockScriptFlags()
  * for that.
  */
+// COMMENT HOUSE: Script rules for new transactions (see script/interpreter.cpp):
+//   - MANDATORY flags: rules from soft forks that are now consensus (P2SH,
+//     strict signatures, time locks, SegWit, Taproot). Breaking these makes a
+//     transaction invalid.
+//   - STANDARD flags: the mandatory ones PLUS extra policy rules, mostly
+//     against malleability, and to keep future upgrade features unused for
+//     now. Breaking only these extras makes a transaction "non-standard" but
+//     not invalid, so the peer that sent it is not punished.
 inline constexpr script_verify_flags MANDATORY_SCRIPT_VERIFY_FLAGS{SCRIPT_VERIFY_P2SH |
                                                              SCRIPT_VERIFY_DERSIG |
                                                              SCRIPT_VERIFY_NULLDUMMY |
@@ -142,6 +190,9 @@ std::vector<uint32_t> GetDust(const CTransaction& tx, CFeeRate dust_relay_rate);
 // Changing the default transaction version requires a two step process: first
 // adapting relay policy by bumping TX_MAX_STANDARD_VERSION, and then later
 // allowing the new transaction version in the wallet/RPC.
+// COMMENT HOUSE: Standard transaction versions are 1, 2 and 3. Version 2 is
+// needed for relative time locks (BIP 68), and version 3 ("TRUC",
+// BIP 431) opts into stricter rules that make fee bumping more reliable.
 inline constexpr decltype(CTransaction::version) TX_MIN_STANDARD_VERSION{1};
 inline constexpr decltype(CTransaction::version) TX_MAX_STANDARD_VERSION{3};
 
@@ -172,6 +223,8 @@ bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
 bool SpendsNonAnchorWitnessProg(const CTransaction& tx, const CCoinsViewCache& prevouts);
 
 /** Compute the virtual transaction size (weight reinterpreted as bytes). */
+// COMMENT HOUSE: Virtual size (vsize): weight / 4, rounded up, adjusted for
+// signature-heavy transactions. Explained in policy/policy.cpp.
 int64_t GetVirtualTransactionSize(int64_t nWeight, int64_t nSigOpCost, unsigned int bytes_per_sigop);
 int64_t GetVirtualTransactionSize(const CTransaction& tx, int64_t nSigOpCost, unsigned int bytes_per_sigop);
 int64_t GetVirtualTransactionInputSize(const CTxIn& tx, int64_t nSigOpCost, unsigned int bytes_per_sigop);
