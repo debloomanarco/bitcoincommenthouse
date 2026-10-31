@@ -4,6 +4,27 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// Phase 5 is about DIGITAL SIGNATURES, the proof that you are allowed to
+// spend a coin. Every user has two linked keys:
+//   - a PRIVATE key: a secret, randomly chosen 32-byte number. Whoever knows
+//     it can spend the coins. Never share it.
+//   - a PUBLIC key: worked out from the private key with special maths. It
+//     is safe to share, and coins are locked to it (or to its hash).
+// With the private key you can make a SIGNATURE for a message (in Bitcoin,
+// the message is a hash of the transaction). Anyone with the public key can
+// check the signature, but cannot make a new one. It is like a wax seal that
+// only you can make, but anyone can recognise.
+// The maths is "elliptic curve cryptography" on a curve called secp256k1.
+// It is easy to go from private key to public key, but practically
+// impossible to go back.
+//
+// This file describes PRIVATE keys (CKey). Public keys are in pubkey.h.
+// The real maths is done by the secp256k1 library in the src/secp256k1/
+// folder. Bitcoin Core just calls it.
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_KEY_H
 #define BITCOIN_KEY_H
 
@@ -31,9 +52,15 @@ struct secp256k1_keypair;
  * CPrivKey is a serialized private key, with all parameters included
  * (SIZE bytes)
  */
+// COMMENT HOUSE: CPrivKey is a private key saved in a longer, older file
+// format. secure_allocator keeps it in special memory that is wiped when it
+// is no longer needed, so secrets do not linger in the computer's memory.
 typedef std::vector<unsigned char, secure_allocator<unsigned char> > CPrivKey;
 
 /** Size of ECDH shared secrets. */
+// COMMENT HOUSE: ECDH is a way for two computers to agree on a shared secret
+// using their keys. It is used to encrypt connections between nodes (BIP 324),
+// not for spending coins. You can skip it.
 inline constexpr size_t ECDH_SECRET_SIZE = CSHA256::OUTPUT_SIZE;
 
 // Used to represent ECDH shared secret (ECDH_SECRET_SIZE bytes)
@@ -42,6 +69,10 @@ using ECDHSecret = std::array<std::byte, ECDH_SECRET_SIZE>;
 class KeyPair;
 
 /** An encapsulated private key. */
+// COMMENT HOUSE: CKey, a private key.
+// The secret itself is 32 bytes (keydata). fCompressed says whether its
+// public key will be written in the short (33-byte) or old long (65-byte)
+// form. Both forms describe the same key.
 class CKey
 {
 public:
@@ -69,6 +100,8 @@ private:
     secure_unique_ptr<KeyType> keydata;
 
     //! Check whether the 32-byte array pointed to by vch is valid keydata.
+    // COMMENT HOUSE: Not every 32-byte number is allowed as a private key. It must
+    // be above 0 and below a huge limit set by the curve. Check() tests that.
     bool static Check(const unsigned char* vch);
 
     void MakeKeyData()
@@ -137,6 +170,11 @@ public:
     bool IsCompressed() const { return fCompressed; }
 
     //! Generate a new private key using a cryptographic PRNG.
+    // COMMENT HOUSE: MakeNewKey() makes a brand-new private key from strong random
+    // numbers. Good randomness is essential: if anyone could guess the number,
+    // they could steal the coins. There are about 2^256 possible keys, more than
+    // the number of atoms in the observable universe, so two people choosing the
+    // same key by chance is practically impossible.
     void MakeNewKey(bool fCompressed);
 
     /**
@@ -149,12 +187,16 @@ public:
      * Compute the public key from a private key.
      * This is expensive.
      */
+    // COMMENT HOUSE: GetPubKey() works out the public key from the private key.
+    // This is the one-way step: easy forwards, practically impossible backwards.
     CPubKey GetPubKey() const;
 
     /**
      * Create a DER-serialized signature.
      * The test_case parameter tweaks the deterministic nonce.
      */
+    // COMMENT HOUSE: Sign() makes an ECDSA signature (the older signature type,
+    // used before Taproot) for a 32-byte hash. The result goes into vchSig.
     bool Sign(const uint256& hash, std::vector<unsigned char>& vchSig, bool grind = true, uint32_t test_case = 0) const;
 
     /**
@@ -164,6 +206,8 @@ public:
      *                  0x1D = second key with even y, 0x1E = second key with odd y,
      *                  add 0x04 for compressed keys.
      */
+    // COMMENT HOUSE: A signature that lets someone recover the public key from it.
+    // Used for "sign message" in wallets, not for transactions.
     bool SignCompact(const uint256& hash, std::vector<unsigned char>& vchSig) const;
 
     /**
@@ -181,9 +225,14 @@ public:
      *                              (this is used for key path spending, with specific
      *                              Merkle root of the script tree).
      */
+    // COMMENT HOUSE: SignSchnorr() makes a Schnorr signature (BIP 340), the newer
+    // signature type used by Taproot. "Tweaking" the key is explained in Phase 8.
     bool SignSchnorr(const uint256& hash, std::span<unsigned char> sig, const uint256* merkle_root, const uint256& aux) const;
 
     //! Derive BIP32 child key.
+    // COMMENT HOUSE: Derive() makes a "child" key from this key (BIP 32). Wallets
+    // use this to create endless new keys from one backup, usually a list of 12
+    // or 24 words.
     [[nodiscard]] bool Derive(CKey& keyChild, ChainCode &ccChild, unsigned int nChild, const ChainCode& cc) const;
 
     /**
@@ -233,8 +282,12 @@ public:
     KeyPair ComputeKeyPair(const uint256* merkle_root) const;
 };
 
+// COMMENT HOUSE: A shortcut: make and return a brand-new random private key.
 CKey GenerateRandomKey(bool compressed = true) noexcept;
 
+// COMMENT HOUSE: CExtKey, an "extended" key (BIP 32): a private key plus extra
+// data (a "chain code") that allows child keys to be derived from it. It is
+// the basis of modern wallets. Not needed to understand the protocol.
 struct CExtKey {
     unsigned char nDepth;
     KeyFingerprint fingerprint;
@@ -297,6 +350,8 @@ std::optional<std::pair<CExtKey, KeyOriginInfo>> DeriveExtKey(const CExtKey& ext
  *  A KeyPair can be created from a CKey with an optional merkle_root tweak (per BIP342). See
  *  CKey::ComputeKeyPair for more details.
  */
+// COMMENT HOUSE: KeyPair holds a private key and its public key together, in
+// the form the secp256k1 library wants for Schnorr signatures (Phase 8).
 class KeyPair
 {
 public:
@@ -360,6 +415,8 @@ secp256k1_context* GetSecp256k1SignContext();
  * In the future global ECC state could be removed, and this class could contain
  * state and be passed as an argument to ECC key functions.
  */
+// COMMENT HOUSE: The secp256k1 library must be set up once before keys can be
+// used. Creating an ECC_Context does that, and destroying it cleans up.
 class ECC_Context
 {
 public:
