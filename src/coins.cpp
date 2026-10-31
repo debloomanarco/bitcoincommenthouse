@@ -2,6 +2,20 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The code behind the UTXO set cache described in coins.h. Read coins.h
+// first. It shows how coins are actually looked up, added and spent in
+// memory, and how changes are later written down to the view below
+// (usually the database on disk).
+// Two flags on each cached coin explain most of the code:
+//   - DIRTY: "changed in this cache, must be written down later".
+//   - FRESH: "created in this cache, and the view below has never seen it".
+// FRESH allows a neat shortcut: if a FRESH coin is spent before it is ever
+// written down, it can simply be forgotten. The database never needs to hear
+// about it. Many coins are created and spent within a short time, so this
+// saves a lot of disk work.
+// You can skip the TRACEPOINT lines. They are hooks for performance-
+// measuring tools.
 #include <coins.h>
 
 #include <consensus/consensus.h>
@@ -56,6 +70,13 @@ std::optional<Coin> CCoinsViewCache::FetchCoinFromBase(const COutPoint& outpoint
     return base->GetCoin(outpoint);
 }
 
+// COMMENT HOUSE: FetchCoin(), the heart of the cache. Look for the coin in
+// memory (cacheCoins). If it is not there, ask the view below
+// (FetchCoinFromBase()). If found there, keep a copy in memory for next
+// time. If not found anywhere, remove the empty placeholder and report
+// "not found" (cacheCoins.end()).
+// try_emplace() adds an empty entry only if the outpoint is not there yet,
+// and "inserted" says whether it did.
 CCoinsMap::iterator CCoinsViewCache::FetchCoin(const COutPoint &outpoint) const {
     const auto [ret, inserted] = cacheCoins.try_emplace(outpoint);
     if (inserted) {
@@ -77,6 +98,15 @@ std::optional<Coin> CCoinsViewCache::GetCoin(const COutPoint& outpoint) const
     return std::nullopt;
 }
 
+// COMMENT HOUSE: AddCoin(): add a newly created coin.
+//   - Unspendable outputs (such as OP_RETURN data) are never added. Nobody
+//     can ever spend them, so there is no reason to remember them.
+//   - The coin is marked DIRTY, because it is a change the view below must
+//     learn about.
+//   - It is also marked FRESH if the view below cannot have it yet. The long
+//     developer comment explains a reorg case where that is not safe.
+//   - Overwriting an unspent coin is an error, unless the caller said it
+//     might happen (possible_overwrite).
 void CCoinsViewCache::AddCoin(const COutPoint &outpoint, Coin&& coin, bool possible_overwrite) {
     assert(!coin.IsSpent());
     if (coin.out.scriptPubKey.IsUnspendable()) return;
@@ -130,6 +160,10 @@ void CCoinsViewCache::EmplaceCoinInternalDANGER(const COutPoint& outpoint, Coin&
     }
 }
 
+// COMMENT HOUSE: AddCoins(): add EVERY output of a transaction as a new coin.
+// Output i gets the outpoint (txid, i), plus the block height and whether
+// it came from a coinbase. Coinbases may overwrite because of the two
+// duplicate coinbases from 2010 (see the BIP 30 note in validation.cpp).
 void AddCoins(CCoinsViewCache& cache, const CTransaction &tx, int nHeight, bool check_for_overwrite) {
     bool fCoinbase = tx.IsCoinBase();
     const Txid& txid = tx.GetHash();
@@ -141,6 +175,13 @@ void AddCoins(CCoinsViewCache& cache, const CTransaction &tx, int nHeight, bool 
     }
 }
 
+// COMMENT HOUSE: SpendCoin(): mark a coin as spent.
+//   - If "moveout" is given, the coin is moved there first. That is how the
+//     undo data (undo.h) gets its copy of each spent coin.
+//   - If the coin is FRESH, the view below never knew about it, so it is
+//     simply erased from memory: the shortcut described at the top.
+//   - Otherwise it is emptied (Clear()) and marked DIRTY, so that the next
+//     Flush() tells the view below "this coin is now spent".
 bool CCoinsViewCache::SpendCoin(const COutPoint &outpoint, Coin* moveout) {
     CCoinsMap::iterator it = FetchCoin(outpoint);
     if (it == cacheCoins.end()) return false;
@@ -165,6 +206,9 @@ bool CCoinsViewCache::SpendCoin(const COutPoint &outpoint, Coin* moveout) {
     return true;
 }
 
+// COMMENT HOUSE: An empty coin, returned by AccessCoin() when the coin is not
+// found. Returning a "nothing here" coin is simpler for callers than
+// returning an error.
 static const Coin coinEmpty;
 
 const Coin& CCoinsViewCache::AccessCoin(const COutPoint &outpoint) const {
@@ -176,6 +220,9 @@ const Coin& CCoinsViewCache::AccessCoin(const COutPoint &outpoint) const {
     }
 }
 
+// COMMENT HOUSE: HaveCoin(): does an UNSPENT coin exist at this outpoint?
+// HaveCoinInCache() below is the same, but only looks in memory and never
+// asks the view below.
 bool CCoinsViewCache::HaveCoin(const COutPoint& outpoint) const
 {
     CCoinsMap::const_iterator it = FetchCoin(outpoint);
@@ -269,6 +316,10 @@ void CCoinsViewCache::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& in
     SetBestBlock(in_block_hash);
 }
 
+// COMMENT HOUSE: Flush() and Sync(): write all DIRTY coins down to the view
+// below in one batch (BatchWrite()), together with the hash of the block
+// this state matches. Flush() then empties this cache. Sync() keeps the
+// unspent coins in memory for later use.
 void CCoinsViewCache::Flush(bool reallocate_cache)
 {
     auto cursor{CoinsViewCacheCursor(m_dirty_count, m_sentinel, cacheCoins, /*will_erase=*/true)};
@@ -300,6 +351,10 @@ void CCoinsViewCache::Reset() noexcept
     SetBestBlock(uint256::ZERO);
 }
 
+// COMMENT HOUSE: Uncache(): remove a coin from memory, but ONLY if it is not
+// DIRTY, because a DIRTY coin holds a change that has not been saved yet.
+// Used after a rejected mempool transaction (see AcceptToMemoryPool() in
+// validation.cpp).
 void CCoinsViewCache::Uncache(const COutPoint& hash)
 {
     CCoinsMap::iterator it = cacheCoins.find(hash);
@@ -319,6 +374,8 @@ unsigned int CCoinsViewCache::GetCacheSize() const {
     return cacheCoins.size();
 }
 
+// COMMENT HOUSE: HaveInputs(): does every input spend a coin that exists and
+// is unspent? A coinbase has no real inputs, so it always passes.
 bool CCoinsViewCache::HaveInputs(const CTransaction& tx) const
 {
     if (!tx.IsCoinBase()) {
@@ -415,6 +472,9 @@ CCoinsViewCache::ResetGuard CoinsViewOverlay::StartFetching(const CBlock& block 
 static const uint64_t MIN_TRANSACTION_OUTPUT_WEIGHT{WITNESS_SCALE_FACTOR * ::GetSerializeSize(CTxOut())};
 static const uint64_t MAX_OUTPUTS_PER_BLOCK{MAX_BLOCK_WEIGHT / MIN_TRANSACTION_OUTPUT_WEIGHT};
 
+// COMMENT HOUSE: AccessByTxid(): find ANY unspent output of a transaction by
+// trying output 0, 1, 2, ... up to the most outputs a block could ever hold.
+// That can mean many lookups, which is why coins.h warns that it is slow.
 const Coin& AccessByTxid(const CCoinsViewCache& view, const Txid& txid)
 {
     COutPoint iter(txid, 0);
