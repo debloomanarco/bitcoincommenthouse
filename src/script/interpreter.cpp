@@ -3,6 +3,21 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The Script INTERPRETER, the code that actually RUNS scripts and checks
+// signatures. Read script/script.h first: it explains the stack and walks
+// through a P2PKH example. This file is over 2,000 lines long, so only a few
+// functions have COMMENT HOUSE notes. Read them in this order:
+//   1. EvalScript():    runs one script on a stack, one opcode at a time.
+//   2. VerifyScript():  the top level. It runs the unlocking script, then
+//                       the locking script, and handles P2SH and SegWit.
+//   3. SignatureHash(): works out exactly WHAT gets signed.
+//   4. CheckECDSASignature(): connects OP_CHECKSIG to CPubKey::Verify().
+// The SegWit and Taproot parts (VerifyWitnessProgram(), ComputeTapleafHash(),
+// VerifyTaprootCommitment(), SignatureHashSchnorr()) belong to Phases 7
+// and 8.
+// When a script fails, the reason is recorded in "serror" using the codes
+// listed in script/script_error.h.
 #include <script/interpreter.h>
 
 #include <crypto/ripemd160.h>
@@ -43,6 +58,10 @@ inline bool set_error(ScriptError* ret, const ScriptError serror)
 
 } // namespace
 
+// COMMENT HOUSE: CastToBool() decides whether a stack item counts as "true".
+// An item is false if it is empty or all zero bytes (including "negative
+// zero", 0x80 as the last byte). Anything else is true. A script succeeds if
+// it finishes with a true item on top of the stack.
 bool CastToBool(const valtype& vch)
 {
     for (unsigned int i = 0; i < vch.size(); i++)
@@ -414,6 +433,20 @@ static bool EvalChecksig(const valtype& sig, const valtype& pubkey, CScript::con
     assert(false);
 }
 
+// COMMENT HOUSE: EvalScript(), the stack machine.
+// It runs "script" using "stack" (a list of byte lists, whose last item is
+// the top of the stack). The big loop below:
+//   1. reads the next opcode with GetOp() (see script/script.h),
+//   2. checks the safety limits (item size, number of opcodes, disabled
+//      opcodes),
+//   3. if it is a push, puts the data on the stack,
+//   4. otherwise runs that opcode in the large "switch" statement, where each
+//      "case OP_...:" is one instruction.
+// "flags" switches on rules added by later soft forks. "checker" is the
+// object that checks signatures, since a script cannot see the transaction
+// itself. vfExec keeps track of OP_IF / OP_ELSE branches: when inside a
+// branch that is not taken, opcodes are skipped (fExec is false).
+// If any rule is broken, the function stops and returns false.
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror)
 {
     static const CScriptNum bnZero(0);
@@ -485,6 +518,10 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
             if (opcode == OP_CODESEPARATOR && sigversion == SigVersion::BASE && (flags & SCRIPT_VERIFY_CONST_SCRIPTCODE))
                 return set_error(serror, SCRIPT_ERR_OP_CODESEPARATOR);
 
+            // COMMENT HOUSE: Step 3: a push opcode. Put the data on top of the stack.
+            // With SCRIPT_VERIFY_MINIMALDATA, the data must be pushed in the shortest
+            // possible way, so nobody can change a transaction's bytes without changing
+            // its meaning.
             if (fExec && 0 <= opcode && opcode <= OP_PUSHDATA4) {
                 if (fRequireMinimal && !CheckMinimalPush(vchPushValue, opcode)) {
                     return set_error(serror, SCRIPT_ERR_MINIMALDATA);
@@ -801,6 +838,10 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 }
                 break;
 
+                // COMMENT HOUSE: OP_DUP: copy the top item. The developer note "(x -- x x)"
+                // is a common way to show what an opcode does: before the "--" is the top of
+                // the stack before, and after it is the top of the stack afterwards.
+                // stacktop(-1) means "the top item", and stacktop(-2) the one below it.
                 case OP_DUP:
                 {
                     // (x -- x x)
@@ -894,6 +935,10 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 //
                 // Bitwise logic
                 //
+                // COMMENT HOUSE: OP_EQUAL: take the top two items off and push true if they
+                // are byte-for-byte the same, or false if not. OP_EQUALVERIFY does the same,
+                // but then fails the whole script straight away if the answer was false.
+                // That is step 5 of the P2PKH example in script/script.h.
                 case OP_EQUAL:
                 case OP_EQUALVERIFY:
                 //case OP_NOTEQUAL: // use OP_NUMNOTEQUAL
@@ -1029,6 +1074,10 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 //
                 // Crypto
                 //
+                // COMMENT HOUSE: The hashing opcodes: take the top item, hash it, and push the
+                // hash. OP_HASH160 (SHA-256 then RIPEMD-160, 20 bytes) is step 3 of the P2PKH
+                // example. The hash functions themselves come from the crypto/ folder and
+                // hash.h.
                 case OP_RIPEMD160:
                 case OP_SHA1:
                 case OP_SHA256:
@@ -1066,6 +1115,11 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 }
                 break;
 
+                // COMMENT HOUSE: OP_CHECKSIG: the top item is a public key and the one below is
+                // a signature. EvalChecksig() checks the signature against this
+                // transaction (through "checker", see CheckECDSASignature() further down),
+                // then both items are replaced with true or false. This is step 6 of the
+                // P2PKH example, and where the cryptography from Phase 5 is finally used.
                 case OP_CHECKSIG:
                 case OP_CHECKSIGVERIFY:
                 {
@@ -1229,6 +1283,8 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
             }
 
             // Size limits
+            // COMMENT HOUSE: After every opcode: the stack may never hold more than 1,000
+            // items.
             if (stack.size() + altstack.size() > MAX_STACK_SIZE)
                 return set_error(serror, SCRIPT_ERR_STACK_SIZE);
         }
@@ -1607,6 +1663,30 @@ void SigHashCache::Store(int32_t hash_type, const CScript& script_code, const Ha
 }
 
 template <class T>
+// COMMENT HOUSE: SignatureHash(), WHAT exactly is signed?
+// A signature does not sign "the transaction" directly. It signs a 32-byte
+// hash, called the "sighash", of chosen parts of it. That hash must cover
+// the parts the signer cares about, such as where the money goes, so that
+// nobody can change them without breaking the signature. It cannot cover the
+// signature itself, because the signature does not exist yet.
+// nHashType (the "sighash type", the last byte of every signature) chooses
+// which parts are covered:
+//   - SIGHASH_ALL (the usual one): all inputs and all outputs.
+//   - SIGHASH_NONE: inputs only. Anyone may change the outputs!
+//   - SIGHASH_SINGLE: only the output with the same position as this input.
+//   - SIGHASH_ANYONECANPAY (added to one of the above): only THIS input, so
+//     others may add their own inputs (useful for crowdfunding).
+// There are two recipes:
+//   - For SegWit version 0 inputs (BIP 143), it hashes a fixed list of
+//     parts, including the AMOUNT of the coin being spent. That lets
+//     hardware wallets know the fee they are approving, and it avoids a
+//     slowdown where big transactions took a very long time to check.
+//   - For older inputs, it copies the transaction with every scriptSig
+//     blanked out except this input's (CTransactionSignatureSerializer),
+//     then hashes it.
+// The SIGHASH_SINGLE check at the top is a famous old bug: if there is no
+// matching output, the "hash" is simply the number 1. It is kept because
+// changing it would change the consensus rules.
 uint256 SignatureHash(const CScript& scriptCode, const T& txTo, unsigned int nIn, int32_t nHashType, const CAmount& amount, SigVersion sigversion, const PrecomputedTransactionData* cache, SigHashCache* sighash_cache)
 {
     assert(nIn < txTo.vin.size());
@@ -1699,6 +1779,12 @@ bool GenericTransactionSignatureChecker<T>::VerifySchnorrSignature(std::span<con
 }
 
 template <class T>
+// COMMENT HOUSE: CheckECDSASignature() is where OP_CHECKSIG ends up. It:
+//   1. reads the public key,
+//   2. takes the sighash type (the last byte) off the signature,
+//   3. calculates the sighash with SignatureHash(), and
+//   4. calls VerifyECDSASignature(), which uses CPubKey::Verify()
+//      (pubkey.cpp) to do the actual maths.
 bool GenericTransactionSignatureChecker<T>::CheckECDSASignature(const std::vector<unsigned char>& vchSigIn, const std::vector<unsigned char>& vchPubKey, const CScript& scriptCode, SigVersion sigversion) const
 {
     CPubKey pubkey(vchPubKey);
@@ -2009,6 +2095,23 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
     // There is intentionally no return statement here, to be able to use "control reaches end of non-void function" warnings to detect gaps in the logic above.
 }
 
+// COMMENT HOUSE: VerifyScript(), can this input spend this coin?
+// This is the function validation calls for each input (through
+// CheckInputScripts() in validation.cpp). In order:
+//   1. Run the unlocking script (scriptSig) on an empty stack.
+//   2. Run the locking script (scriptPubKey) on the SAME stack. The top item
+//      at the end must be true.
+//   3. If the lock is a SegWit program, check the witness instead
+//      (VerifyWitnessProgram(), Phase 7).
+//   4. If the lock is P2SH, the last item the scriptSig pushed is itself a
+//      script (the "redeem script"). It is run too, with the rest of the
+//      stack, and must also end with true.
+//   5. CLEANSTACK: for SegWit and P2SH, exactly one item may be left.
+// Why run them separately instead of joining them into one script? The
+// developer comment mentions CVE-2010-5141: in 2010, joining them meant a
+// spender could add OP_RETURN-style tricks to their scriptSig that skipped
+// the lock entirely, and spend ANYONE's coins. Running them one after the
+// other on a shared stack fixed it.
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror)
 {
     static const CScriptWitness emptyWitness;
