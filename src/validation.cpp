@@ -1864,6 +1864,22 @@ PackageMempoolAcceptResult ProcessNewPackage(Chainstate& active_chainstate, CTxM
     return result;
 }
 
+// COMMENT HOUSE: GetBlockSubsidy(), Bitcoin's whole money supply schedule
+// in a few lines. The "subsidy" is the number of NEW coins a miner may create
+// in the block at height nHeight (on top of the fees it collects).
+//   - halvings: how many times the reward has been cut in half so far.
+//     Dividing whole numbers drops any remainder, so blocks 0 to 209,999
+//     give 0, blocks 210,000 to 419,999 give 1, and so on.
+//   - It starts at 50 bitcoins.
+//   - ">>= halvings" shifts the number's binary digits right by "halvings"
+//     places. Each shift right halves it, so it goes 50, 25, 12.5, 6.25 ...
+//     Because amounts are whole satoshis, the reward eventually rounds
+//     down to 0, around the year 2140.
+//   - After 64 halvings, shifting would not be well defined in C++, so the
+//     answer is simply 0.
+// Adding up all the rewards gives just under 21 million bitcoins. That is
+// where the famous limit comes from: there is no counter of total coins,
+// only this schedule.
 CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
 {
     int halvings = nHeight / consensusParams.nSubsidyHalvingInterval;
