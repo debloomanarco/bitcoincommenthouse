@@ -3,6 +3,22 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// FEE RATES. A transaction's fee is inputs minus outputs (see
+// primitives/transaction.h), but what really matters is the fee RATE: how
+// much it pays for each unit of block space it uses. Block space is
+// limited, so miners pick the transactions that pay the most per unit
+// (see addChunks() in node/miner.cpp). It is like comparing grocery prices
+// "per kilogram" instead of "per bag".
+// The unit is satoshis per virtual byte (sat/vB). The "virtual size"
+// (vsize) is the weight divided by 4, so witness data counts less (see
+// GetVirtualTransactionSize() in policy/policy.cpp). For example, a
+// transaction of 200 vB that pays 1,000 satoshis has a fee rate of 5 sat/vB.
+// Bitcoin Core can also show fee rates in BTC per 1,000 vB (BTC/kvB), an
+// older unit. 1 sat/vB is the same as 0.00001 BTC/kvB.
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_POLICY_FEERATE_H
 #define BITCOIN_POLICY_FEERATE_H
 
@@ -16,6 +32,8 @@
 #include <string>
 #include <type_traits>
 
+// COMMENT HOUSE: Names for the units: BTC (1 bitcoin) and sat (1 satoshi,
+// one hundred-millionth of a bitcoin, see consensus/amount.h).
 inline const std::string CURRENCY_UNIT = "BTC"; // One formatted unit
 inline const std::string CURRENCY_ATOM = "sat"; // One indivisible minimum value unit
 
@@ -28,6 +46,9 @@ enum class FeeRateFormat {
  * Fee rate in satoshis per virtualbyte: CAmount / vB
  * the feerate is represented internally as FeeFrac
  */
+// COMMENT HOUSE: CFeeRate, a fee rate stored as an exact fraction: a fee in
+// satoshis over a size in virtual bytes (FeePerVSize). Keeping both numbers,
+// instead of dividing, avoids rounding errors when comparing rates.
 class CFeeRate
 {
 private:
@@ -38,6 +59,9 @@ public:
     /** Fee rate of 0 satoshis per 0 vB */
     CFeeRate() = default;
     template<std::integral I> // Disallow silent float -> int conversion
+    // COMMENT HOUSE: Make a fee rate from "satoshis per 1,000 vB". The template
+    // only accepts whole numbers. Passing a decimal number by mistake would
+    // otherwise be quietly rounded.
     explicit constexpr CFeeRate(const I m_feerate_kvb) : m_feerate(FeePerVSize(m_feerate_kvb, 1000)) {}
 
     /**
@@ -61,6 +85,9 @@ public:
      * If the calculated fee would have fractional satoshis, then the
      * returned fee will always be rounded up to the nearest satoshi.
      */
+    // COMMENT HOUSE: GetFee(): how much a transaction of this size must pay at
+    // this rate. Partial satoshis are always rounded UP, so the fee is never too
+    // low.
     CAmount GetFee(int32_t virtual_bytes) const;
 
     FeePerVSize GetFeePerVSize() const { return m_feerate; }
@@ -69,6 +96,9 @@ public:
      * Return the fee in satoshis for a vsize of 1000 vbytes
      */
     CAmount GetFeePerK() const { return CAmount(m_feerate.EvaluateFeeDown(1000)); }
+    // COMMENT HOUSE: Comparing fee rates. ByRatio compares the fractions properly:
+    // 1,000 sat for 200 vB (5 sat/vB) counts as higher than 1,500 sat for 400 vB
+    // (3.75 sat/vB), even though the second fee is bigger.
     friend std::strong_ordering operator<=>(const CFeeRate& a, const CFeeRate& b) noexcept
     {
         return ByRatio{a.m_feerate} <=> ByRatio{b.m_feerate};
