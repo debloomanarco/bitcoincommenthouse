@@ -3,6 +3,14 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The code for the public-key functions announced in pubkey.h. Read
+// pubkey.h first. As in key.cpp, the real maths is done by the secp256k1
+// library. The most important function for beginners is CPubKey::Verify(),
+// the other half of CKey::Sign() in key.cpp: Sign() uses the private key to
+// make a signature, and Verify() uses the public key to check it.
+// The Taproot functions (VerifySchnorr() and the TapTweak ones) belong to
+// Phase 8.
 #include <pubkey.h>
 
 #include <hash.h>
@@ -22,6 +30,8 @@ using namespace util::hex_literals;
 
 namespace {
 
+// COMMENT HOUSE: When the program starts, the secp256k1 library tests itself
+// before it is used, to catch a broken build early.
 struct Secp256k1SelfTester
 {
     Secp256k1SelfTester() {
@@ -42,6 +52,10 @@ struct Secp256k1SelfTester
  *  strict DER before being passed to this module, and we know it supports all
  *  violations present in the blockchain before that point.
  */
+// COMMENT HOUSE: You can skip this long function. Before BIP 66 (2015),
+// signatures did not have to be written in strict DER format, and some old
+// blocks contain sloppily written ones. This "lax" reader can read all of
+// them, so those old blocks can still be checked.
 int ecdsa_signature_parse_der_lax(secp256k1_ecdsa_signature* sig, const unsigned char *input, size_t inputlen) {
     size_t rpos, rlen, spos, slen;
     size_t pos = 0;
@@ -233,6 +247,8 @@ bool XOnlyPubKey::IsFullyValid() const
     return secp256k1_xonly_pubkey_parse(secp256k1_context_static, &pubkey, m_keydata.data());
 }
 
+// COMMENT HOUSE: Checks a Taproot (Schnorr) signature. It is the same idea as
+// CPubKey::Verify() below: read the key, then ask secp256k1 to verify.
 bool XOnlyPubKey::VerifySchnorr(const uint256& msg, std::span<const unsigned char> sigbytes) const
 {
     assert(sigbytes.size() == 64);
@@ -241,6 +257,9 @@ bool XOnlyPubKey::VerifySchnorr(const uint256& msg, std::span<const unsigned cha
     return secp256k1_schnorrsig_verify(secp256k1_context_static, sigbytes.data(), msg.begin(), 32, &pubkey);
 }
 
+// COMMENT HOUSE: TaggedHash (from hash.h, Phase 1) makes a hash that can only
+// ever be used for one purpose, here "TapTweak". The tweak functions below
+// are explained in Phase 8.
 static const HashWriter HASHER_TAPTWEAK{TaggedHash("TapTweak")};
 
 uint256 XOnlyPubKey::ComputeTapTweakHash(const uint256* merkle_root) const
@@ -280,6 +299,17 @@ std::optional<std::pair<XOnlyPubKey, bool>> XOnlyPubKey::CreateTapTweak(const ui
 }
 
 
+// COMMENT HOUSE: Verify(), checking an ECDSA signature. Step by step:
+//   1. Check the key has a sensible length (IsValid()).
+//   2. Read the public key, which also checks it is really a point on the
+//      curve.
+//   3. Read the signature (using the lax reader above).
+//   4. Turn a "high S" signature into its "low S" twin (see CheckLowS() in
+//      pubkey.h), because the library only accepts low S.
+//   5. Ask secp256k1 the real question: was this hash signed by the private
+//      key matching this public key? The answer is true or false.
+// This function is called for nearly every input of every transaction when
+// a node checks the blockchain, so it runs billions of times.
 bool CPubKey::Verify(const uint256 &hash, const std::vector<unsigned char>& vchSig) const {
     if (!IsValid())
         return false;
@@ -297,6 +327,8 @@ bool CPubKey::Verify(const uint256 &hash, const std::vector<unsigned char>& vchS
     return secp256k1_ecdsa_verify(secp256k1_context_static, &sig, hash.begin(), &pubkey);
 }
 
+// COMMENT HOUSE: The reverse of CKey::SignCompact(): work out which public key
+// made this signature. Used for "verify message" in wallets.
 bool CPubKey::RecoverCompact(const uint256 &hash, const std::vector<unsigned char>& vchSig) {
     if (vchSig.size() != COMPACT_SIGNATURE_SIZE)
         return false;
@@ -317,6 +349,7 @@ bool CPubKey::RecoverCompact(const uint256 &hash, const std::vector<unsigned cha
     return true;
 }
 
+// COMMENT HOUSE: The thorough check: is this key really a point on the curve?
 bool CPubKey::IsFullyValid() const {
     if (!IsValid())
         return false;
@@ -338,6 +371,8 @@ bool CPubKey::Decompress() {
     return true;
 }
 
+// COMMENT HOUSE: BIP 32 child public keys, used by wallets. You can skip the
+// rest of this file.
 bool CPubKey::Derive(CPubKey& pubkeyChild, ChainCode &ccChild, unsigned int nChild, const ChainCode& cc, uint256* bip32_tweak_out) const {
     assert(IsValid());
     assert((nChild >> 31) == 0);
