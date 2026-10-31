@@ -2,6 +2,10 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The code for the bloom filters described in common/bloom.h. Read that
+// first for the idea: a row of bits, several hashes per item, and answers
+// of "definitely not" or "maybe".
 #include <common/bloom.h>
 
 #include <hash.h>
@@ -20,9 +24,23 @@
 #include <compare>
 #include <vector>
 
+// COMMENT HOUSE: ln(2) and ln(2) squared, used in the formulas for the best
+// filter size and number of hash functions (ln is the natural logarithm).
 static constexpr double LN2SQUARED = 0.4804530139182014246671025263266649717305529515945455;
 static constexpr double LN2 = 0.6931471805599453094172321214581765680755001343602552;
 
+// COMMENT HOUSE: BloomFilterSize() works out how many BYTES the filter needs
+// for a number of items and a false-positive rate. The formula is
+//     bits = -items x ln(rate) / ln(2)^2
+// then it is capped at the protocol limit and divided by 8 to get bytes.
+// For example, 1,000 items at a 1% rate needs about 9,600 bits (1,200 bytes).
+// Two special cases come first. They were added by a 2026 upstream fix, so
+// odd inputs can no longer make the maths misbehave:
+//   - 0 items: the filter is empty (size 0), which means "match everything".
+//   - a rate of 0 (never wrong): impossible in theory, because ln(0) is
+//     minus infinity. It gets the biggest filter allowed instead.
+// Assert() stops the program if the rate is not a real number between 0 and
+// 1, because that would be a programming mistake.
 static unsigned int BloomFilterSize(const unsigned int elements, const double false_positive_rate)
 {
     Assert(std::isfinite(false_positive_rate) && false_positive_rate >= 0 && false_positive_rate <= 1);
@@ -31,6 +49,10 @@ static unsigned int BloomFilterSize(const unsigned int elements, const double fa
     return std::min(-1 / LN2SQUARED * elements * log(false_positive_rate), MAX_BLOOM_FILTER_SIZE * 8.0) / 8;
 }
 
+// COMMENT HOUSE: Build a filter: size the bit row with BloomFilterSize(), then
+// choose how many hash functions to use (bits per item x ln(2), up to the
+// limit). With 0 items there are 0 hash functions, which avoids dividing by
+// zero.
 CBloomFilter::CBloomFilter(const unsigned int nElements, const double nFPRate, const unsigned int nTweakIn, unsigned char nFlagsIn) :
     /**
      * The ideal size for a bloom filter with a given number of elements and false positive rate is:
@@ -49,12 +71,20 @@ CBloomFilter::CBloomFilter(const unsigned int nElements, const double nFPRate, c
 {
 }
 
+// COMMENT HOUSE: Hash number nHashNum of an item. MurmurHash3 is a fast hash
+// that is NOT cryptographic (unlike SHA-256), which is fine here. Each hash
+// number uses a different starting value ("seed"), mixed with nTweak. The
+// result modulo (% ) the number of bits picks one bit position.
 inline unsigned int CBloomFilter::Hash(unsigned int nHashNum, std::span<const unsigned char> vDataToHash) const
 {
     // 0xFBA4C795 chosen as it guarantees a reasonable bit difference between nHashNum values.
     return MurmurHash3(nHashNum * 0xFBA4C795 + nTweak, vDataToHash) % (vData.size() * 8);
 }
 
+// COMMENT HOUSE: Add an item: for each hash function, set its chosen bit to 1.
+// nIndex >> 3 picks the byte (dividing by 8), and 7 & nIndex picks the bit
+// inside it. An empty filter is skipped. CVE-2013-5700 was a 2013 bug where
+// an empty filter from a peer made nodes divide by zero and crash.
 void CBloomFilter::insert(std::span<const unsigned char> vKey)
 {
     if (vData.empty()) // Avoid divide-by-zero (CVE-2013-5700)
@@ -74,6 +104,9 @@ void CBloomFilter::insert(const COutPoint& outpoint)
     insert(MakeUCharSpan(stream));
 }
 
+// COMMENT HOUSE: Check an item: if ANY of its bits is 0, the answer is
+// "definitely not". If all are 1, it is "maybe". An empty filter matches
+// everything.
 bool CBloomFilter::contains(std::span<const unsigned char> vKey) const
 {
     if (vData.empty()) // Avoid divide-by-zero (CVE-2013-5700)
@@ -100,6 +133,15 @@ bool CBloomFilter::IsWithinSizeConstraints() const
     return vData.size() <= MAX_BLOOM_FILTER_SIZE && nHashFuncs <= MAX_HASH_FUNCS;
 }
 
+// COMMENT HOUSE: IsRelevantAndUpdate(): does this transaction interest the
+// wallet that sent the filter? It matches if the filter contains:
+//   1. the transaction's txid,
+//   2. any data pushed in an output's locking script (such as a public key
+//      hash). With the update flags, that output's outpoint is added to the
+//      filter, so the later transaction that spends it will match too,
+//   3. the outpoint of any coin an input spends, or
+//   4. any data pushed in an input's unlocking script (such as a public key).
+// It reads scripts with GetOp() from script/script.h.
 bool CBloomFilter::IsRelevantAndUpdate(const CTransaction& tx)
 {
     bool fFound = false;
@@ -168,6 +210,11 @@ bool CBloomFilter::IsRelevantAndUpdate(const CTransaction& tx)
     return false;
 }
 
+// COMMENT HOUSE: The rolling filter. You can skip the details. Items are added
+// in "generations" of about half of nElements each. Every item stores which
+// generation it belongs to, using 2 bits per position. When a third
+// generation starts, the bits of the oldest one are wiped, so old items are
+// forgotten and the filter never fills up.
 CRollingBloomFilter::CRollingBloomFilter(const unsigned int nElements, const double fpRate)
 {
     double logFpRate = log(fpRate);
