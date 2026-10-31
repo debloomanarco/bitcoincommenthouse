@@ -14,6 +14,11 @@ Bitcoin Comment House is an educational project that adds comments to Core so th
 
 Bitcoin Comment House: Proposed Learning Sequence
 
+Status: comments have been added to the code. Every file in the eight phases below now has beginner explanations, and so do the extra files listed in "Additional files with comments" further down: 59 files and 614 notes in total. The code itself has not been changed. With the comments taken out, every file is identical to Bitcoin Core.
+
+To find the explanations, search for the marker // COMMENT HOUSE: (for example, grep -rn "COMMENT HOUSE" src). Most commented files start with a "What is this file?" note that says what the file does and which files to read first.
+
+The line numbers below come from the original Bitcoin Core files. Adding comments has moved them, so search for the function name instead.
 
 How the repository is organized
 
@@ -146,10 +151,45 @@ Phase 8: Taproot
 - TaggedHash from Phase 1 pays off here.
 - Why last: Taproot combines everything before it: hashing, keys, script, witness and the deployment parameters.
 
+Additional files with comments
+
+After the eight phases were finished, these files were commented too. They fill gaps that the earlier notes point to, or connect the code to things readers have seen, like a Bitcoin address.
+
+Filling gaps in the course
+- chain.h and chain.cpp: the node's map of the blockchain. CBlockIndex is an "index card" for each block (pprev, nHeight, nChainWork, GetMedianTimePast()), and CChain is the active chain. Read these after Phase 2.
+- primitives/transaction_identifier.h: Txid and Wtxid, and why they are separate types.
+- undo.h: undo data, the "receipts" that let a block be taken back off the chain during a reorg.
+- coins.cpp: how coins are looked up, added and spent in the UTXO cache.
+- consensus/tx_check.h and consensus/tx_verify.h: the headers for tx_check.cpp and tx_verify.cpp.
+
+Addresses: how "1...", "3..." and "bc1..." addresses work
+- addresstype.h and addresstype.cpp: which locking script each kind of address stands for.
+- base58.cpp: the original "1..." and "3..." address format and its checksum.
+- key_io.cpp: turning addresses and private keys into text and back.
+- bech32.h: the header for bech32.cpp.
+
+Fees and the mempool
+- policy/feerate.h: fee rates in sat/vB.
+- policy/policy.h: the default numbers behind this node's policy rules.
+- policy/rbf.cpp: replace-by-fee, swapping a stuck transaction for one that pays more.
+- txmempool.h: the mempool, the waiting room for unconfirmed transactions.
+
+Supporting files
+- hash.cpp, uint256.cpp: small companions to Phase 1.
+- versionbits.cpp: how miners vote on upgrades (BIP 9). Read it after consensus/params.h.
+- script/script.cpp: the helper functions behind script/script.h.
+- kernel/chainparams.h, node/miner.h: the headers for kernel/chainparams.cpp and node/miner.cpp.
+
+From the October 2026 Bitcoin Core update
+When new Bitcoin Core commits were merged in, the code they changed got notes as well:
+- common/bloom.h and common/bloom.cpp: bloom filters.
+- util/btcsignals.h: the internal event ("signal") system.
+- net_processing.cpp: only the wtxidrelay message handling, which the update changed.
+
 Files to deliberately avoid at first
 
 - serialize.h (1,224 lines of advanced C++ templates): use it as a reference only.
-- net_processing.cpp, wallet/, qt/, rpc/: important, but not needed to understand the protocol.
+- net_processing.cpp, wallet/, qt/, rpc/: important, but not needed to understand the protocol. (net_processing.cpp has only one small note, from the October 2026 update.)
 - secp256k1/, leveldb/, crc32c/, minisketch/: copied from upstream projects. Keep them untouched so future updates merge cleanly.
 
 How I'd keep the work safe and traceable
