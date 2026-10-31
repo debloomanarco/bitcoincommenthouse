@@ -3,6 +3,42 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// Phase 6 is about SCRIPT, Bitcoin's own tiny programming language. Every
+// output carries a LOCK written in Script (the scriptPubKey, see CTxOut in
+// primitives/transaction.h). To spend it, an input supplies a KEY, also
+// written in Script (the scriptSig, or since SegWit the witness). The coin
+// can be spent only if running key + lock ends with "true".
+//
+// Script is deliberately simple. It has no loops, so every script finishes
+// quickly. It works with a STACK, like a pile of plates: you can only put a
+// plate on top ("push") or take the top one off ("pop"). Each instruction,
+// called an "opcode", is one byte. Opcodes either push data onto the stack
+// or do something with the items on top of it.
+//
+// Example, the classic payment "pay to public key hash" (P2PKH):
+//   lock (scriptPubKey): OP_DUP OP_HASH160 <pubkey hash> OP_EQUALVERIFY
+//                        OP_CHECKSIG
+//   key  (scriptSig):    <signature> <public key>
+// Running the key and then the lock:
+//   1. <signature> and <public key> are pushed. Stack: sig, pubkey
+//   2. OP_DUP copies the top item.             Stack: sig, pubkey, pubkey
+//   3. OP_HASH160 hashes the top item.         Stack: sig, pubkey, hash
+//   4. <pubkey hash> from the lock is pushed.  Stack: sig, pubkey, hash, hash
+//   5. OP_EQUALVERIFY: the two hashes must be equal, or the script fails.
+//      Both are removed.                       Stack: sig, pubkey
+//   6. OP_CHECKSIG checks the signature with the public key (see
+//      CPubKey::Verify() in pubkey.cpp) and pushes true or false.
+//                                              Stack: true
+// In plain words: "show me a public key that matches this hash, and a valid
+// signature from it."
+//
+// This file defines the opcodes (opcodetype), numbers in Script
+// (CScriptNum), the script itself (CScript), and witness data
+// (CScriptWitness). The code that RUNS scripts is in script/interpreter.cpp.
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_SCRIPT_SCRIPT_H
 #define BITCOIN_SCRIPT_SCRIPT_H
 
@@ -26,6 +62,9 @@
 #include <vector>
 
 // Maximum number of bytes pushable to the stack
+// COMMENT HOUSE: Safety limits. They make sure no script can take too long to
+// run or use too much memory: at most 520 bytes per stack item, 201
+// non-push operations, 10,000 bytes per script, and 1,000 stack items.
 inline constexpr unsigned int MAX_SCRIPT_ELEMENT_SIZE = 520;
 
 // Maximum number of non-push operations per script
@@ -45,6 +84,11 @@ inline constexpr int MAX_STACK_SIZE = 1000;
 
 // Threshold for nLockTime: below this value it is interpreted as block number,
 // otherwise as UNIX timestamp.
+// COMMENT HOUSE: The dividing line used by nLockTime (see IsFinalTx() in
+// consensus/tx_verify.cpp): below 500 million it means a block height,
+// and above it means a date. Block heights will not reach 500 million for
+// thousands of years, and that number of seconds after 1970 falls in 1985,
+// before Bitcoin existed, so the two meanings can never clash.
 inline constexpr unsigned int LOCKTIME_THRESHOLD{500'000'000}; // Tue Nov  5 00:53:20 1985 UTC
 
 // Maximum nLockTime. Since a lock time indicates the last invalid timestamp, a
@@ -59,6 +103,7 @@ inline constexpr uint32_t LOCKTIME_MAX = 0xFFFFFFFFU;
 inline constexpr unsigned int ANNEX_TAG = 0x50;
 
 // Validation weight per passing signature (Tapscript only, see BIP 342).
+// COMMENT HOUSE: Taproot script limits (BIP 342, Phase 8).
 inline constexpr int64_t VALIDATION_WEIGHT_PER_SIGOP_PASSED{50};
 
 // How much weight budget is added to the witness size (Tapscript only, see BIP 342).
@@ -71,6 +116,32 @@ std::vector<unsigned char> ToByteVector(const T& in)
 }
 
 /** Script opcodes */
+// COMMENT HOUSE: opcodetype, the list of every Script instruction and its
+// one-byte code. They are grouped by kind:
+//   - push value: put data or a small number on the stack. OP_0 pushes
+//                 "false" (empty), and OP_1 to OP_16 push the numbers 1 to
+//                 16. Bytes 0x01 to 0x4b (not listed by name) mean "push the
+//                 next 1 to 75 bytes as data". OP_PUSHDATA1/2/4 handle larger
+//                 data.
+//   - control:    OP_IF / OP_ELSE / OP_ENDIF choose what to run. OP_VERIFY
+//                 fails the script unless the top item is true. OP_RETURN
+//                 fails immediately, which makes an output unspendable (used
+//                 to store data in the blockchain).
+//   - stack ops:  rearrange the stack (OP_DUP copies, OP_DROP removes,
+//                 OP_SWAP swaps, and so on).
+//   - splice and bit logic: some of these (like OP_CAT) are "disabled" and
+//                 fail if used. They were switched off in 2010 for safety.
+//   - numeric:    small-number maths: OP_ADD, OP_SUB, OP_LESSTHAN, ...
+//   - crypto:     hashing (OP_SHA256, OP_HASH160, ...) and signature checks
+//                 (OP_CHECKSIG, OP_CHECKMULTISIG).
+//   - expansion:  OP_NOP1 to OP_NOP10 originally did nothing. Two were later
+//                 given new meanings by soft forks: OP_CHECKLOCKTIMEVERIFY
+//                 (BIP 65) and OP_CHECKSEQUENCEVERIFY (BIP 112), for time
+//                 locks.
+//   - OP_CHECKSIGADD: added by Taproot (BIP 342) for multisig.
+// The "VERIFY" versions (like OP_EQUALVERIFY) do the same as the normal one
+// and then OP_VERIFY, so the script fails straight away if the answer is
+// false.
 enum opcodetype
 {
     // push value
@@ -224,6 +295,11 @@ public:
     explicit scriptnum_error(const std::string& str) : std::runtime_error(str) {}
 };
 
+// COMMENT HOUSE: CScriptNum, how numbers are handled inside Script. Numbers
+// on the stack are stored as bytes, least important byte first, with the
+// top bit of the last byte meaning "negative". Maths opcodes only accept
+// numbers up to 4 bytes long. The developer comment below explains the
+// details. You can skip the inside of this class.
 class CScriptNum
 {
 /**
@@ -397,11 +473,23 @@ private:
  * We use a prevector for the script to reduce the considerable memory overhead
  *  of vectors in cases where they normally contain a small number of small elements.
  */
+// COMMENT HOUSE: A prevector is like a std::vector (a list that can grow),
+// but small scripts (up to 36 bytes, which covers most locking scripts) are
+// stored directly inside it, with no extra memory needed. With hundreds of
+// millions of scripts, that saves a lot.
 using CScriptBase = prevector<36, uint8_t>;
 
 bool GetScriptOp(CScriptBase::const_iterator& pc, CScriptBase::const_iterator end, opcodetype& opcodeRet, std::vector<unsigned char>* pvchRet);
 
 /** Serialized script, used inside transaction inputs and outputs */
+// COMMENT HOUSE: CScript, a script: just a list of bytes. Opcodes and pushed
+// data are written one after another.
+// The << operator ADDS things to the end of a script. For example:
+//     CScript() << OP_DUP << OP_HASH160 << hash << OP_EQUALVERIFY
+//               << OP_CHECKSIG
+// builds the P2PKH lock shown at the top of this file. When data is added,
+// the right "push" opcode is written in front of it automatically
+// (AppendDataSize() and push_int64() below).
 class CScript : public CScriptBase
 {
 private:
@@ -494,6 +582,9 @@ public:
         return *this << std::as_bytes(b);
     }
 
+    // COMMENT HOUSE: GetOp() reads the NEXT instruction from the script, starting
+    // at position pc, and moves pc forward. If it is a push, the data is put in
+    // vchRet. The interpreter uses this to step through a script.
     bool GetOp(const_iterator& pc, opcodetype& opcodeRet, std::vector<unsigned char>& vchRet) const
     {
         return GetScriptOp(pc, end(), opcodeRet, &vchRet);
@@ -527,6 +618,8 @@ public:
      * counted more accurately, assuming they are of the form
      *  ... OP_N CHECKMULTISIG ...
      */
+    // COMMENT HOUSE: Counts the signature operations in this script (see
+    // consensus/tx_verify.cpp).
     unsigned int GetSigOpCount(bool fAccurate) const;
 
     /**
@@ -543,6 +636,11 @@ public:
      */
     static bool IsPayToAnchor(int version, const std::vector<unsigned char>& program);
 
+    // COMMENT HOUSE: Recognise common script shapes:
+    //   - P2SH (pay to script hash, BIP 16): the lock is a HASH of a script,
+    //     and the spender reveals the full script. Addresses start with "3".
+    //   - P2WSH, witness programs and Taproot: SegWit and Taproot shapes
+    //     (Phases 7 and 8). Addresses start with "bc1".
     bool IsPayToScriptHash() const;
     bool IsPayToWitnessScriptHash() const;
     bool IsWitnessProgram(int& version, std::vector<unsigned char>& program) const;
@@ -551,6 +649,9 @@ public:
 
     /** Called by IsStandardTx and P2SH/BIP62 VerifyScript (which makes it consensus-critical). */
     bool IsPushOnly(const_iterator pc) const;
+    // COMMENT HOUSE: Does the script only push data (no other instructions)?
+    // Policy requires this of every scriptSig (see IsStandardTx() in
+    // policy/policy.cpp).
     bool IsPushOnly() const;
 
     /** Check if the script contains valid OP_CODES */
@@ -561,6 +662,8 @@ public:
      * regardless of the initial stack. This allows outputs to be pruned
      * instantly when entering the UTXO set.
      */
+    // COMMENT HOUSE: An output whose script starts with OP_RETURN, or is too long,
+    // can never be spent. Nodes do not keep such outputs in the UTXO set.
     bool IsUnspendable() const
     {
         return (size() > 0 && *begin() == OP_RETURN) || (size() > MAX_SCRIPT_SIZE);
@@ -574,6 +677,10 @@ public:
     }
 };
 
+// COMMENT HOUSE: CScriptWitness, the WITNESS of one input (SegWit, Phase 7).
+// Instead of putting the signature in the scriptSig, SegWit inputs put it
+// here: a list of data items ("stack") that is loaded straight onto the
+// stack. This data is NOT included in the txid (see primitives/transaction.cpp).
 struct CScriptWitness
 {
     // Note that this encodes the data elements being pushed, rather than
@@ -593,6 +700,8 @@ struct CScriptWitness
 };
 
 /** A reference to a CScript: the Hash160 of its serialization */
+// COMMENT HOUSE: CScriptID, the 20-byte Hash160 of a script. It is the "script
+// hash" in P2SH, just as CKeyID (pubkey.h) is the hash of a key.
 class CScriptID : public BaseHash<uint160>
 {
 public:
@@ -602,11 +711,16 @@ public:
 };
 
 /** Test for OP_SUCCESSx opcodes as defined by BIP342. */
+// COMMENT HOUSE: In Taproot scripts, unused opcodes are "OP_SUCCESS": they make
+// the script succeed instantly. That sounds unsafe, but it reserves them so
+// future soft forks can give them new meanings (Phase 8).
 bool IsOpSuccess(const opcodetype& opcode);
 
 bool CheckMinimalPush(const std::vector<unsigned char>& data, opcodetype opcode);
 
 /** Build a script by concatenating other scripts, or any argument accepted by CScript::operator<<. */
+// COMMENT HOUSE: BuildScript() joins scripts and opcodes together into one
+// script. "typename... Ts" means it accepts any number of arguments.
 template<typename... Ts>
 CScript BuildScript(Ts&&... inputs)
 {
