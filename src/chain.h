@@ -3,6 +3,26 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The node's MAP of the blockchain. Many earlier files use pindex,
+// pindexPrev, pprev, nHeight, Tip() and GetMedianTimePast(). They all
+// come from here.
+// Two classes matter:
+//   - CBlockIndex: a small "index card" for ONE block. It holds the block's
+//     header fields, its height, a pointer to its parent, the total work up
+//     to it, how far it has been checked, and where it is saved on disk.
+//     The full block (all its transactions) stays on disk. Only these small
+//     cards are kept in memory, one for every block the node knows about.
+//   - CChain: the ACTIVE chain, the one path from the genesis block to the
+//     current tip that this node believes is the real blockchain.
+// Why both? Because the node may know about blocks that are NOT on the active
+// chain, such as the losing side of two blocks found at the same moment.
+// Together, all the index cards form a TREE (the developer comment above
+// CBlockIndex says this too). CChain is one branch of that tree: the one with
+// the most work (see ActivateBestChain() in validation.cpp).
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_CHAIN_H
 #define BITCOIN_CHAIN_H
 
@@ -26,6 +46,10 @@
  * Maximum amount of time that a block timestamp is allowed to exceed the
  * current time before the block will be accepted.
  */
+// COMMENT HOUSE: A block's timestamp may be at most 2 hours ahead of this
+// node's clock (BLOCK_TIME_FUTURE in consensus/validation.h). Computer clocks
+// are never perfectly in sync, so some leeway is allowed, but not so much
+// that miners could fake the time to ease difficulty.
 inline constexpr int64_t MAX_FUTURE_BLOCK_TIME = 2 * 60 * 60;
 
 /**
@@ -39,6 +63,17 @@ inline constexpr int64_t TIMESTAMP_WINDOW = MAX_FUTURE_BLOCK_TIME;
 inline constexpr int32_t SEQ_ID_BEST_CHAIN_FROM_DISK = 0;
 inline constexpr int32_t SEQ_ID_INIT_FROM_DISK = 1;
 
+// COMMENT HOUSE: BlockStatus, how far a block has been checked, and what is
+// stored. Checking happens in stages, and each stage needs more data than
+// the last:
+//   - VALID_TREE:         the header is fine, and its parents are known.
+//   - VALID_TRANSACTIONS: the transactions arrived and pass CheckBlock().
+//   - VALID_CHAIN:        it passes checks that need its parent blocks.
+//   - VALID_SCRIPTS:      fully checked, including every signature.
+// HAVE_DATA and HAVE_UNDO say whether the full block and its undo data (see
+// undo.h) are on disk. FAILED_VALID marks a block found to be invalid.
+// The values are separate bits (1, 2, 4, 8, ...), so several can be stored in
+// one number. That is why some are written as powers of two.
 enum BlockStatus : uint32_t {
     //! Unused.
     BLOCK_VALID_UNKNOWN      =    0,
@@ -90,6 +125,7 @@ enum BlockStatus : uint32_t {
  * candidates to be the next block. A blockindex may have multiple pprev pointing
  * to it, but at most one of them can be part of the currently active branch.
  */
+// COMMENT HOUSE: CBlockIndex, the "index card" for one block.
 class CBlockIndex
 {
 public:
@@ -97,6 +133,13 @@ public:
     const uint256* phashBlock{nullptr};
 
     //! pointer to the index of the predecessor of this block
+    // COMMENT HOUSE: The links that make the chain:
+    //   - pprev: the parent block's card. Following pprev again and again walks
+    //     back to the genesis block, whose pprev is nullptr (nothing).
+    //   - pskip: a shortcut to a block much further back, so GetAncestor() can
+    //     jump backwards quickly instead of one block at a time. This is called a
+    //     "skip list".
+    //   - nHeight: how many blocks come before this one. Genesis is height 0.
     CBlockIndex* pprev{nullptr};
 
     //! pointer to the index of some further predecessor of this block
@@ -106,6 +149,10 @@ public:
     int nHeight{0};
 
     //! Which # file this block is stored in (blk?????.dat)
+    // COMMENT HOUSE: Where the full block lives on disk: which blk?????.dat file,
+    // and where in it. Undo data goes in the matching rev?????.dat file.
+    // GUARDED_BY(::cs_main) means "only touch this while holding the main lock",
+    // so two threads never change it at the same time.
     int nFile GUARDED_BY(::cs_main){0};
 
     //! Byte offset within blk?????.dat where this block's data is stored
@@ -115,6 +162,10 @@ public:
     uint64_t nUndoPos GUARDED_BY(::cs_main){0};
 
     //! (memory only) Total amount of work (expected number of hashes) in the chain up to and including this block
+    // COMMENT HOUSE: nChainWork: the TOTAL mining work from genesis up to and
+    // including this block (the sum of GetBlockProof() for every block). The
+    // active chain is the one whose tip has the most nChainWork. It uses
+    // arith_uint256 (arith_uint256.h) because it must be added up and compared.
     arith_uint256 nChainWork{};
 
     //! Number of transactions in this block. This will be nonzero if the block
@@ -137,6 +188,9 @@ public:
     uint32_t nStatus GUARDED_BY(::cs_main){0};
 
     //! block header
+    // COMMENT HOUSE: A copy of the block header's fields (see primitives/block.h),
+    // so the header can be rebuilt without reading the disk (GetBlockHeader()).
+    // hashPrevBlock is not stored, because pprev already points to the parent.
     int32_t nVersion{0};
     uint256 hashMerkleRoot{};
     uint32_t nTime{0};
@@ -228,6 +282,12 @@ public:
         return (int64_t)nTimeMax;
     }
 
+    // COMMENT HOUSE: GetMedianTimePast(), the "median time past" used by time
+    // locks (consensus/tx_verify.cpp) and mining (node/miner.cpp). It takes the
+    // timestamps of this block and the 10 before it, sorts them, and returns the
+    // middle one. One miner can lie about one block's time, but cannot move the
+    // middle of 11 by much. That makes it a trustworthy "current time" for
+    // the chain.
     static constexpr int nMedianTimeSpan = 11;
 
     int64_t GetMedianTimePast() const
@@ -247,6 +307,9 @@ public:
     std::string ToString() const;
 
     //! Check whether this block index entry is valid up to the passed validity level.
+    // COMMENT HOUSE: IsValid(): has this block reached at least the given checking
+    // stage (see BlockStatus), without failing? RaiseValidity() records that it
+    // reached a new stage.
     bool IsValid(enum BlockStatus nUpTo) const
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
@@ -276,6 +339,9 @@ public:
     void BuildSkip();
 
     //! Efficiently find an ancestor of this block.
+    // COMMENT HOUSE: GetAncestor(height): the card of this block's ancestor at the
+    // given height, found quickly with the pskip shortcuts. For example,
+    // pow.cpp uses it to find the first block of a 2016-block period.
     CBlockIndex* GetAncestor(int height);
     const CBlockIndex* GetAncestor(int height) const;
 
@@ -299,6 +365,11 @@ protected:
 };
 
 /** Compute how much work an nBits value corresponds to. */
+// COMMENT HOUSE: WORK. GetBlockProof() works out how much work one block
+// represents from its nBits target: about 2^256 / (target + 1), which is
+// the average number of hashes needed to find such a block. A harder target
+// (a smaller number) means more work. These values are added up into
+// nChainWork.
 arith_uint256 GetBitsProof(uint32_t bits);
 
 /** Compute how much work a block index entry corresponds to. */
@@ -310,10 +381,16 @@ inline arith_uint256 GetBlockProof(const CBlockHeader& header) { return GetBitsP
 /** Return the time it would take to redo the work difference between from and to, assuming the current hashrate corresponds to the difficulty at tip, in seconds. */
 int64_t GetBlockProofEquivalentTime(const CBlockIndex& to, const CBlockIndex& from, const CBlockIndex& tip, const Consensus::Params&);
 /** Find the forking point between two chain tips. */
+// COMMENT HOUSE: LastCommonAncestor(): the newest block that two branches
+// share, the point where they "fork". During a reorg, blocks are disconnected
+// back to this point, then the other branch is connected.
 const CBlockIndex* LastCommonAncestor(const CBlockIndex* pa, const CBlockIndex* pb);
 
 
 /** Used to marshal pointers into hashes for db storage. */
+// COMMENT HOUSE: CDiskBlockIndex is the version of an index card saved in the
+// block index database, so the node does not need to rebuild its map every
+// time it starts. You can skip it.
 class CDiskBlockIndex : public CBlockIndex
 {
     /** Historically CBlockLocator's version field has been written to disk
@@ -376,6 +453,17 @@ public:
 };
 
 /** An in-memory indexed chain of blocks. */
+// COMMENT HOUSE: CChain, the ACTIVE chain.
+// It is simply a list (vChain) of index cards, where vChain[h] is the block
+// at height h. This makes common questions very fast:
+//   - Genesis():         vChain[0].
+//   - Tip():             the last entry, the newest block.
+//   - chain[h]:          the block at height h.
+//   - Contains(block):   is this block on the active chain? Just check
+//                        whether the entry at its height is this exact card.
+//   - Height():          the tip's height.
+// SetTip() rebuilds the list when the tip changes, following pprev links
+// back until it meets the old chain.
 class CChain
 {
 private:
@@ -447,6 +535,9 @@ public:
 };
 
 /** Get a locator for a block index entry. */
+// COMMENT HOUSE: Build a CBlockLocator (see primitives/block.h): a list of
+// block hashes going back from this block with growing gaps, to tell a
+// peer where this node is in the chain.
 CBlockLocator GetLocator(const CBlockIndex* index);
 
 /** Construct a list of hash entries to put in a locator.  */
