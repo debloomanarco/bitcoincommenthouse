@@ -2,6 +2,15 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The code for a few hashing helpers announced in hash.h (read that first:
+// it explains hashing as a "digital fingerprint"). Most of hash.h needs no
+// .cpp file. These four do:
+//   - MurmurHash3(): a FAST but NOT secure hash, used by bloom filters
+//     (common/bloom.cpp).
+//   - BIP32Hash():   used by wallets to derive child keys.
+//   - SHA256Uint256(): a single SHA-256 of a 32-byte value.
+//   - TaggedHash():  the "labelled" hash Taproot uses (Phase 8).
 #include <hash.h>
 #include <span.h>
 #include <crypto/common.h>
@@ -10,6 +19,12 @@
 #include <bit>
 #include <string>
 
+// COMMENT HOUSE: MurmurHash3 mixes the data 4 bytes at a time using
+// multiplication, bit rotation (std::rotl) and XOR (^), then "finalises"
+// the result so every input bit affects every output bit. It is much faster
+// than SHA-256, but someone could deliberately find inputs that collide, so
+// it is only used where that does not matter, such as bloom filters. The
+// seed lets the same data give different hashes.
 unsigned int MurmurHash3(unsigned int nHashSeed, std::span<const unsigned char> vDataToHash)
 {
     // The following is MurmurHash3 (x86_32), see https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp
@@ -68,6 +83,9 @@ unsigned int MurmurHash3(unsigned int nHashSeed, std::span<const unsigned char> 
     return h1;
 }
 
+// COMMENT HOUSE: BIP32Hash(): the step that makes child key number nChild
+// from a parent key and its chain code (see Derive() in key.h). HMAC-SHA512
+// is a "keyed" hash: a hash mixed with a secret, here the chain code.
 void BIP32Hash(const ChainCode &chainCode, unsigned int nChild, unsigned char header, const unsigned char data[32], unsigned char output[64])
 {
     unsigned char num[4];
@@ -82,6 +100,11 @@ uint256 SHA256Uint256(const uint256& input)
     return result;
 }
 
+// COMMENT HOUSE: TaggedHash() (BIP 340), a hash with a LABEL. It starts by
+// hashing the tag text (such as "TapLeaf" or "TapTweak") and feeding that
+// hash in twice before any data. Hashes made with different tags can never
+// be confused with each other, even for the same data. This stops an
+// attacker from reusing a hash made for one purpose in another.
 HashWriter TaggedHash(const std::string& tag)
 {
     HashWriter writer{};
