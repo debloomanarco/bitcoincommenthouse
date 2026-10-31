@@ -3,6 +3,33 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// It describes the UTXO SET: the list of every coin that exists right now
+// and has not been spent. (UTXO means "unspent transaction output", see
+// primitives/transaction.h.) Think of it as a giant list of every bill in
+// everyone's wallet. To check whether a transaction is allowed, a node looks
+// up each input's coin in this list:
+//   - If the coin is there, it exists and has not been spent yet.
+//   - If it is not there, the coin either never existed or was already
+//     spent. That is how Bitcoin stops "double spending".
+// When a block is accepted, the coins its transactions spend are removed
+// from the list, and the new outputs they create are added.
+//
+// The list has well over 100 million coins and is stored in a database on
+// disk. Reading the disk is slow, so Bitcoin Core keeps a copy of recently
+// used coins in memory (a "cache"), like keeping your most-used books on
+// your desk instead of on the library shelf.
+//
+// The parts beginners should read:
+//   - Coin:            one entry in the list.
+//   - CCoinsView:      the "menu" of things you can ask the list.
+//   - CCoinsViewCache: the in-memory cache, used by almost all validation.
+//   - AddCoins():      adds a transaction's new outputs.
+// The rest (cache entry flags, hashers, cursors, CoinsViewOverlay) are
+// details of how the cache is made fast. You can skip them on a first read.
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_COINS_H
 #define BITCOIN_COINS_H
 
@@ -42,6 +69,18 @@ class ThreadPool;
  * - VARINT((height << 1) | (coinbase ? 1 : 0))
  * - the non-spent CTxOut (via TxOutCompression)
  */
+// COMMENT HOUSE: Coin, one entry in the UTXO set.
+// It holds three things:
+//   - out:       the output itself, its amount and locking script (CTxOut).
+//   - fCoinBase: true if it came from a coinbase transaction. Those coins
+//                must wait 100 blocks before they can be spent (see
+//                consensus/tx_verify.cpp).
+//   - nHeight:   the block height where it was created.
+// The ": 1" and ": 31" squeeze fCoinBase into 1 bit and nHeight into 31
+// bits, so both fit into 4 bytes. With so many coins, saving space matters.
+// Notice that a Coin does not store its own outpoint (txid and index). The
+// outpoint is used as the KEY to look the coin up, like a locker number,
+// and the Coin is what is inside the locker.
 class Coin
 {
 public:
@@ -71,6 +110,10 @@ public:
         return fCoinBase;
     }
 
+    // COMMENT HOUSE: When saved to disk, the height and the coinbase flag are
+    // packed into one number: the height shifted left by one bit (<< 1), with the
+    // coinbase flag in the last bit. VARINT stores small numbers in fewer bytes,
+    // and TxOutCompression shrinks common kinds of output scripts.
     template<typename Stream>
     void Serialize(Stream &s) const {
         assert(!IsSpent());
@@ -91,6 +134,8 @@ public:
     /** Either this coin never existed (see e.g. coinEmpty in coins.cpp), or it
       * did exist and has been spent.
       */
+    // COMMENT HOUSE: A spent (or missing) coin is represented by an emptied-out
+    // output, so "is it spent?" just means "is the output null?".
     bool IsSpent() const {
         return out.IsNull();
     }
@@ -100,6 +145,11 @@ public:
     }
 };
 
+// COMMENT HOUSE: Skip ahead to CCoinsView on a first read. The parts from here
+// to there are internal details of the cache: how each cached coin is
+// flagged (DIRTY means "changed, must be saved later", FRESH means "brand
+// new, the database has never seen it"), and how coins are found quickly in
+// memory.
 struct CCoinsCacheEntry;
 using CoinsCachePair = std::pair<const COutPoint, CCoinsCacheEntry>;
 
@@ -352,6 +402,18 @@ private:
 };
 
 /** Pure abstract view on the open txout dataset. */
+// COMMENT HOUSE: CCoinsView, the "menu" of questions you can ask about the
+// UTXO set, for example:
+//   - GetCoin(outpoint):  give me the coin at this outpoint, if it exists.
+//   - HaveCoin(outpoint): does an unspent coin exist at this outpoint?
+//   - GetBestBlock():     which block is this list up to date with?
+// "virtual ... = 0" means this class only lists the questions without
+// answering them. It is called an "abstract" class. Other classes, like the
+// on-disk database and CCoinsViewCache below, provide the answers in their
+// own way. That way, validation code can ask the same questions without
+// caring where the coins are actually stored.
+// std::optional<Coin> means "maybe a Coin": it can also hold "nothing" when
+// the coin is not found.
 class CCoinsView
 {
 public:
@@ -388,6 +450,8 @@ public:
 };
 
 /** Noop coins view. */
+// COMMENT HOUSE: A view that always answers "no such coin". Useful as a
+// placeholder.
 class CoinsViewEmpty : public CCoinsView
 {
 protected:
@@ -412,6 +476,9 @@ public:
 };
 
 /** CCoinsView backed by another CCoinsView */
+// COMMENT HOUSE: A view that passes every question on to another view
+// (its "base"). It is the building block for stacking views on top of each
+// other.
 class CCoinsViewBacked : public CCoinsView
 {
 protected:
@@ -433,6 +500,17 @@ public:
 
 
 /** CCoinsView that adds a memory cache for transactions to another CCoinsView */
+// COMMENT HOUSE: CCoinsViewCache, the in-memory cache.
+// It sits on top of another view (often the database on disk). When asked
+// for a coin, it first checks its own memory (cacheCoins). Only if the coin
+// is not there does it ask the view below, and it remembers the answer for
+// next time.
+// Changes (coins added or spent) are kept in memory too, and only written to
+// the view below when Flush() or Sync() is called. This allows a useful
+// trick: to check a new block, validation stacks a temporary cache on top,
+// applies the block's changes there, and only flushes them if the WHOLE
+// block turns out to be valid. If not, the temporary cache is thrown away,
+// and the real UTXO set was never touched.
 class CCoinsViewCache : public CCoinsViewBacked
 {
 private:
@@ -509,6 +587,12 @@ public:
      * on! To be safe, best to not hold the returned reference through any other
      * calls to this cache.
      */
+    // COMMENT HOUSE: The functions most used by validation:
+    //   - AccessCoin(): look up a coin quickly (gives an empty coin if missing).
+    //   - AddCoin():    add a newly created coin.
+    //   - SpendCoin():  mark a coin as spent. "moveto" can receive a copy of the
+    //                   removed coin, so the change can be undone later if the
+    //                   block is disconnected (a "reorg").
     const Coin& AccessCoin(const COutPoint &output) const;
 
     /**
@@ -540,6 +624,8 @@ public:
      * If reallocate_cache is false, the cache will retain the same memory footprint
      * after flushing and should be destroyed to deallocate.
      */
+    // COMMENT HOUSE: Flush() and Sync() write this cache's changes down to the
+    // view below it. Flush() also empties this cache, and Sync() keeps it.
     virtual void Flush(bool reallocate_cache = true);
 
     /**
@@ -566,6 +652,9 @@ public:
     size_t DynamicMemoryUsage() const;
 
     //! Check whether all prevouts of the transaction are present in the UTXO set represented by this view
+    // COMMENT HOUSE: HaveInputs(): are ALL the coins this transaction wants to
+    // spend present and unspent? If even one is missing, the transaction cannot
+    // be valid right now.
     bool HaveInputs(const CTransaction& tx) const;
 
     //! Run an internal sanity check on the cache data structure. */
@@ -788,12 +877,17 @@ public:
 //! an overwrite.
 // TODO: pass in a boolean to limit these possible overwrites to known
 // (pre-BIP34) cases.
+// COMMENT HOUSE: AddCoins() adds every output of a transaction to the UTXO set
+// as new coins, recording the block height and whether it was a coinbase.
 void AddCoins(CCoinsViewCache& cache, const CTransaction& tx, int nHeight, bool check = false);
 
 //! Utility function to find any unspent output with a given txid.
 //! This function can be quite expensive because in the event of a transaction
 //! which is not found in the cache, it can cause up to MAX_OUTPUTS_PER_BLOCK
 //! lookups to database, so it should be used with care.
+// COMMENT HOUSE: Finds any unspent output of a transaction when you know only
+// its txid and not the output number. It may have to try many numbers, so
+// it can be slow.
 const Coin& AccessByTxid(const CCoinsViewCache& cache, const Txid& txid);
 
 /**
@@ -803,6 +897,8 @@ const Coin& AccessByTxid(const CCoinsViewCache& cache, const Txid& txid);
  *
  * Writes do not need similar protection, as failure to write is handled by the caller.
 */
+// COMMENT HOUSE: If the database on disk cannot be read, this view makes the
+// program shut down safely instead of carrying on with wrong data.
 class CCoinsViewErrorCatcher final : public CCoinsViewBacked
 {
 public:
