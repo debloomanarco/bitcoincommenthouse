@@ -3,6 +3,23 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// UNDO DATA, how a node can take a block back off the chain.
+// Connecting a block (ConnectBlock() in validation.cpp) removes every coin
+// its transactions spend from the UTXO set (coins.h). But sometimes a block
+// must be DISCONNECTED again: for example, when a competing branch turns out
+// to have more work (a "reorg", see ActivateBestChain()). To put the spent
+// coins back, the node must remember exactly what they were, because once a
+// coin is spent it is gone from the UTXO set.
+// So, while connecting a block, the node saves a copy of every coin it
+// spends. That copy is the "undo data", stored in the rev?????.dat files
+// next to the blocks (see BLOCK_HAVE_UNDO in chain.h). It is like keeping
+// receipts so you can reverse a purchase.
+// Disconnecting a block then means: remove the coins the block created, and
+// put back the coins saved in its undo data.
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_UNDO_H
 #define BITCOIN_UNDO_H
 
@@ -19,6 +36,10 @@
  *  zero. This is compatible with older versions which expect to see
  *  the transaction version there.
  */
+// COMMENT HOUSE: How ONE spent coin is written into the undo file: its height
+// and coinbase flag packed into one number (the same trick as Coin in
+// coins.h), then the output itself, compressed. The extra 0 byte is only
+// there so old versions of Bitcoin Core can still read the files.
 struct TxInUndoFormatter
 {
     template<typename Stream>
@@ -50,6 +71,8 @@ struct TxInUndoFormatter
 };
 
 /** Undo information for a CTransaction */
+// COMMENT HOUSE: CTxUndo, the undo data for one transaction: a copy of the
+// coin spent by each of its inputs, in the same order as the inputs.
 class CTxUndo
 {
 public:
@@ -60,6 +83,9 @@ public:
 };
 
 /** Undo information for a CBlock */
+// COMMENT HOUSE: CBlockUndo, the undo data for a whole block: one CTxUndo
+// for each transaction. The coinbase is skipped, because it spends no
+// coins, so there is nothing to put back.
 class CBlockUndo
 {
 public:
