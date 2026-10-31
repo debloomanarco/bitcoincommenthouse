@@ -163,5 +163,5 @@ How I'd keep the work safe and traceable
 
 Decisions for you
 
-- Is // BEGINNER EXPLANATION: the marker you want, and is doc/beginner/ the right place for the log?
+- Is // commenthouse: the marker you want, and is doc/beginner/ the right place for the log?
 - Should I start Phase 1 with consensus/amount.h, uint256.h and hash.h as the first batch?
