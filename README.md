@@ -161,7 +161,3 @@ How I'd keep the work safe and traceable
 3. Annotation log: a file like doc/beginner/ANNOTATION_LOG.md, with one row per file: path, functions covered, terms defined, analogies used, and the commit that annotated it.
 4. Glossary: each term is defined once, where it first appears in this sequence, and later files link back to that first definition.
 
-Decisions for you
-
-- Is // commenthouse: the marker you want, and is doc/beginner/ the right place for the log?
-- Should I start Phase 1 with consensus/amount.h, uint256.h and hash.h as the first batch?
