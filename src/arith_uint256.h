@@ -3,6 +3,19 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// A companion to uint256.h. A uint256 is a 32-byte (256-bit) number used
+// as a label, such as a hash, and you cannot do maths with it. An
+// arith_uint256 is the same size of number, but it supports arithmetic:
+// + - * /, comparisons like < and >, and shifting bits.
+// Proof-of-work (pow.cpp) needs this, because it must compare a block's
+// hash with the target and multiply and divide targets.
+// Normal C++ whole numbers only go up to 64 bits, so this file builds a
+// bigger one out of eight 32-bit pieces, like doing long multiplication by
+// hand, one column at a time.
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_ARITH_UINT256_H
 #define BITCOIN_ARITH_UINT256_H
 
@@ -15,12 +28,19 @@
 
 class uint256;
 
+// COMMENT HOUSE: The error thrown if something goes wrong in the maths, such
+// as dividing by zero.
 class uint_error : public std::runtime_error {
 public:
     explicit uint_error(const std::string& str) : std::runtime_error(str) {}
 };
 
 /** Template base class for unsigned big integers. */
+// COMMENT HOUSE: base_uint<BITS>, a whole number with any number of bits
+// (a multiple of 32). It is stored in pn as an array of 32-bit "digits",
+// smallest digit first. The rest of this class defines the usual maths
+// operators for it. You do not need to read how each one works. Just know
+// that they behave like normal arithmetic on very big numbers.
 template <unsigned int BITS>
 class base_uint
 {
@@ -227,6 +247,7 @@ public:
 };
 
 /** 256-bit unsigned big integer. */
+// COMMENT HOUSE: arith_uint256, the 256-bit version used by Bitcoin Core.
 class arith_uint256 : public base_uint<256>
 {
 public:
@@ -254,6 +275,11 @@ public:
      * complexities of the sign bit and using base 256 are probably an
      * implementation accident.
      */
+    // COMMENT HOUSE: SetCompact() unpacks nBits from a block header into the full
+    // target, and GetCompact() packs it back. The developer comment above
+    // explains the format: the first byte says how many bytes long the number
+    // is, and the next three bytes are its leading digits, a bit like
+    // scientific notation. See also DeriveTarget() in pow.cpp.
     arith_uint256& SetCompact(uint32_t nCompact, bool *pfNegative = nullptr, bool *pfOverflow = nullptr);
     uint32_t GetCompact(bool fNegative = false) const;
 
@@ -264,6 +290,10 @@ public:
 // Keeping the trivially copyable property is beneficial for performance
 static_assert(std::is_trivially_copyable_v<arith_uint256>);
 
+// COMMENT HOUSE: These convert between the two types: arith_uint256 to do
+// maths, and uint256 to store and compare hashes as labels. For example,
+// CheckProofOfWorkImpl() in pow.cpp converts the block hash with
+// UintToArith256() so it can test hash <= target.
 uint256 ArithToUint256(const arith_uint256 &);
 arith_uint256 UintToArith256(const uint256 &);
 
