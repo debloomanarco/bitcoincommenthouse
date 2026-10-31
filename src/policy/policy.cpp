@@ -5,6 +5,31 @@
 
 // NOTE: This file is intended to be customised by the end user, and includes only local node policy logic
 
+// COMMENT HOUSE: What is this file?
+// This file teaches one of the most important ideas in Bitcoin:
+// CONSENSUS versus POLICY.
+//   - CONSENSUS rules (the consensus/ folder) are rules EVERY node must
+//     enforce. A block that breaks one is rejected by everyone. Changing them
+//     requires the whole network to agree.
+//   - POLICY rules (this folder) are choices THIS node makes about which
+//     unconfirmed transactions it will accept into its mempool (its waiting
+//     room) and pass on to other nodes. Breaking a policy rule does not make
+//     a transaction invalid. If a miner puts it in a block anyway, every node
+//     still accepts that block.
+// An analogy: consensus is the law, and policy is a shop's own rules, like
+// "no bare feet". A shop can refuse to serve you, but you are not breaking
+// the law.
+// Policy exists to protect nodes from spam and from transactions that are
+// unusually expensive to check. It also keeps unusual script types free
+// for future upgrades. That is why the note above says users may change it.
+// A transaction that passes these rules is called "standard".
+//
+// The main functions:
+//   - GetDustThreshold() / IsDust(): is an output too small to be worth it?
+//   - IsStandardTx():                the main "is this transaction standard?"
+//   - ValidateInputsStandardness(), IsWitnessStandard(): the same for the
+//                                    coins being spent and the witness data.
+//   - GetVirtualTransactionSize():   the "virtual size" used to work out fees.
 #include <policy/policy.h>
 
 #include <coins.h>
@@ -24,6 +49,16 @@
 #include <cstddef>
 #include <vector>
 
+// COMMENT HOUSE: DUST: an output worth so little that spending it would cost
+// more in fees than it is worth, like a coin so small that picking it up
+// costs more energy than it is worth. Such outputs would sit in the UTXO set
+// (see coins.h) forever, taking up space on every node, so this node refuses
+// to relay transactions that create them.
+// The developer comment explains the maths: estimate how many bytes it takes
+// to spend the output, then multiply by a fee rate. At the default rate,
+// classic outputs below 546 satoshis and SegWit outputs below 294 satoshis
+// count as dust. IsUnspendable() outputs (such as OP_RETURN data outputs)
+// can never be spent, so they are not counted as dust.
 CAmount GetDustThreshold(const CTxOut& txout, const CFeeRate& dustRelayFeeIn)
 {
     // "Dust" is defined in terms of dustRelayFee,
@@ -68,6 +103,7 @@ bool IsDust(const CTxOut& txout, const CFeeRate& dustRelayFeeIn)
     return (txout.nValue < GetDustThreshold(txout, dustRelayFeeIn));
 }
 
+// COMMENT HOUSE: Lists the positions of all dust outputs in a transaction.
 std::vector<uint32_t> GetDust(const CTransaction& tx, CFeeRate dust_relay_rate)
 {
     std::vector<uint32_t> dust_outputs;
@@ -77,6 +113,11 @@ std::vector<uint32_t> GetDust(const CTransaction& tx, CFeeRate dust_relay_rate)
     return dust_outputs;
 }
 
+// COMMENT HOUSE: IsStandard() checks ONE output's locking script.
+// Solver() (script/solver.cpp, Phase 6) recognises which standard "shape" a
+// script has, such as pay-to-public-key-hash or Taproot. Any script it does
+// not recognise is NONSTANDARD. Multisig ("m of n people must sign") is
+// only standard for up to 3 keys.
 bool IsStandard(const CScript& scriptPubKey, TxoutType& whichType)
 {
     std::vector<std::vector<unsigned char> > vSolutions;
@@ -97,6 +138,20 @@ bool IsStandard(const CScript& scriptPubKey, TxoutType& whichType)
     return true;
 }
 
+// COMMENT HOUSE: IsStandardTx(), the main policy check.
+// It returns true if the transaction is standard. If not, it returns false
+// and writes a short reason, like "tx-size" or "dust". The checks, in order:
+//   1. version:   only known transaction version numbers are accepted.
+//   2. tx-size:   the transaction must not be too big. Huge transactions can
+//                 take a long time to check, as the developer comment says.
+//   3. scriptSig: each input's unlocking script must not be too long, and
+//                 must only contain data, not instructions ("push only").
+//   4. outputs:   each output must be a standard shape (see IsStandard()).
+//                 Data-only outputs (NULL_DATA, using OP_RETURN) are limited
+//                 in total size, and bare multisig may be refused.
+//   5. dust:      at most a small number of dust outputs is allowed.
+// Compare this with CheckTransaction() in consensus/tx_check.cpp: those are
+// rules a transaction can never break, while these are only preferences.
 bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason)
 {
     if (tx.version > TX_MAX_STANDARD_VERSION || tx.version < TX_MIN_STANDARD_VERSION) {
@@ -167,6 +222,9 @@ bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_dat
 /**
  * Check the total number of non-witness sigops across the whole transaction, as per BIP54.
  */
+// COMMENT HOUSE: Counts the signature operations (see consensus/tx_verify.cpp)
+// a transaction will run, and refuses it if there are too many. BIP 54 is
+// a proposed rule change, so for now this node applies it as policy.
 static bool CheckSigopsBIP54(const CTransaction& tx, const CCoinsViewCache& inputs)
 {
     Assert(!tx.IsCoinBase());
@@ -211,6 +269,10 @@ static bool CheckSigopsBIP54(const CTransaction& tx, const CCoinsViewCache& inpu
  *
  * We also check the total number of non-witness sigops across the whole transaction, as per BIP54.
  */
+// COMMENT HOUSE: Unlike IsStandardTx(), which only looks at the transaction
+// itself, this function also looks up the coins being SPENT (mapInputs, a
+// cache of the UTXO set from coins.h). The developer comment above lists the
+// three things it checks.
 TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoinsViewCache& mapInputs)
 {
     TxValidationState state;
@@ -262,6 +324,9 @@ TxValidationState ValidateInputsStandardness(const CTransaction& tx, const CCoin
     return state;
 }
 
+// COMMENT HOUSE: The same idea for the witness (SegWit signature) data: it
+// must not be unusually large or strangely shaped. SegWit and Taproot are
+// explained in Phases 7 and 8.
 bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
 {
     if (tx.IsCoinBase())
@@ -351,6 +416,9 @@ bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
     return true;
 }
 
+// COMMENT HOUSE: Does this transaction spend any SegWit coin? It ignores
+// "anchor" outputs, tiny outputs used only to help bump a transaction's
+// fee later. This is an advanced detail used by the mempool.
 bool SpendsNonAnchorWitnessProg(const CTransaction& tx, const CCoinsViewCache& prevouts)
 {
     if (tx.IsCoinBase()) {
@@ -387,6 +455,12 @@ bool SpendsNonAnchorWitnessProg(const CTransaction& tx, const CCoinsViewCache& p
     return false;
 }
 
+// COMMENT HOUSE: VIRTUAL SIZE ("vsize"), what fees are based on.
+// Fees are usually quoted in "satoshis per virtual byte" (sat/vB). The
+// virtual size is the weight (see consensus/validation.h) divided by 4 and
+// rounded up, so a byte of witness data counts as only a quarter of a byte.
+// A transaction with a huge number of signature checks for its size is
+// treated as if it were bigger, so it pays fairly for the work it causes.
 int64_t GetSigOpsAdjustedWeight(int64_t weight, int64_t sigop_cost, unsigned int bytes_per_sigop)
 {
     return std::max(weight, sigop_cost * bytes_per_sigop);
