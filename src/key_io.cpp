@@ -2,6 +2,19 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// The final step from inside the program to what people actually see: it
+// turns destinations (addresstype.h) into address TEXT, and back again.
+//   - EncodeDestination(): destination to text, such as "bc1q...".
+//   - DecodeDestination(): text to destination, with helpful error messages.
+// It also handles private keys in "WIF" (wallet import format) and extended
+// keys (xpub/xprv, BIP 32).
+// Which format is used depends on the address type:
+//   - P2PKH and P2SH: Base58Check (base58.cpp), with a 1-byte version prefix.
+//   - SegWit v0 (P2WPKH, P2WSH): Bech32 (bech32.cpp).
+//   - SegWit v1+ (Taproot and later): Bech32m.
+// The prefixes and the "bc" part come from kernel/chainparams.cpp, so the
+// same key gives different-looking addresses on mainnet and testnet.
 #include <key_io.h>
 
 #include <base58.h>
@@ -21,6 +34,16 @@
 static constexpr std::size_t BECH32_WITNESS_PROG_MAX_LEN = 40;
 
 namespace {
+// COMMENT HOUSE: DestinationEncoder: one function per destination type, each
+// producing that type's address text (std::visit picks the right one, as in
+// addresstype.cpp).
+//   - PKHash / ScriptHash: version byte (0 or 5 on mainnet) + 20-byte hash,
+//     then Base58Check.
+//   - SegWit types: the witness version (0 or 1) followed by the program.
+//     ConvertBits<8, 5> regroups the program's 8-bit bytes into 5-bit pieces,
+//     because each bech32 character carries 5 bits. Then bech32::Encode()
+//     adds "bc", the "1" separator and the checksum.
+//   - No destination / bare public key: no address, so empty text.
 class DestinationEncoder
 {
 private:
@@ -83,6 +106,18 @@ public:
     std::string operator()(const PubKeyDestination& pk) const { return {}; }
 };
 
+// COMMENT HOUSE: DecodeDestination(): address text to destination.
+//   1. Does it start with this network's bech32 prefix ("bc")? If not, try
+//      Base58Check. If that works, look at the version byte: the pubkey
+//      prefix gives a PKHash, and the script prefix a ScriptHash.
+//   2. Otherwise decode it as bech32. The first value is the witness
+//      version, and the rest is converted from 5-bit pieces back into bytes.
+//      Version 0 must use Bech32, and version 1 or higher must use Bech32m.
+//      The program length then decides the type (20 bytes = P2WPKH, 32 =
+//      P2WSH, and version 1 with 32 bytes = Taproot).
+//   3. If anything is wrong, it returns CNoDestination and writes a reason
+//      in error_str. For bech32 it can even list where the typos are
+//      (error_locations, from bech32::LocateErrors()).
 CTxDestination DecodeDestination(const std::string& str, const CChainParams& params, std::string& error_str, std::vector<int>* error_locations)
 {
     std::vector<unsigned char> data;
@@ -212,6 +247,12 @@ CTxDestination DecodeDestination(const std::string& str, const CChainParams& par
 }
 } // namespace
 
+// COMMENT HOUSE: Private keys in WIF ("wallet import format"): the secret-key
+// version byte (128 on mainnet, base58Prefixes[SECRET_KEY] in
+// kernel/chainparams.cpp), then the 32-byte key, then an extra 0x01 byte if
+// its public key is compressed, all in Base58Check. Mainnet WIF keys start
+// with "5", "K" or "L". memory_cleanse() wipes the copies from memory
+// afterwards, so the secret does not linger.
 CKey DecodeSecret(const std::string& str)
 {
     CKey key;
@@ -243,6 +284,8 @@ std::string EncodeSecret(const CKey& key)
     return ret;
 }
 
+// COMMENT HOUSE: Extended keys (BIP 32): "xpub..." and "xprv..." text for
+// wallets that derive many keys from one seed. You can skip these.
 CExtPubKey DecodeExtPubKey(const std::string& str)
 {
     CExtPubKey key;
@@ -289,6 +332,8 @@ std::string EncodeExtKey(const CExtKey& key)
     return ret;
 }
 
+// COMMENT HOUSE: Short versions of the functions above that use the current
+// network's settings (Params()).
 std::string EncodeDestination(const CTxDestination& dest)
 {
     return std::visit(DestinationEncoder(Params()), dest);
