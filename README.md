@@ -156,7 +156,7 @@ Files to deliberately avoid at first
 
 How I'd keep the work safe and traceable
 
-1. One comment marker everywhere: // BEGINNER EXPLANATION:, so grep finds every annotation and reviewers can tell them apart from developer comments.
+1. One comment marker everywhere: // COMMENT HOUSE:, so grep finds every annotation and reviewers can tell them apart from developer comments.
 2. Behavior check on every change: git diff should show only added comment lines. A build plus ctest and the functional tests confirm nothing else changed.
 3. Annotation log: a file like doc/beginner/ANNOTATION_LOG.md, with one row per file: path, functions covered, terms defined, analogies used, and the commit that annotated it.
 4. Glossary: each term is defined once, where it first appears in this sequence, and later files link back to that first definition.
