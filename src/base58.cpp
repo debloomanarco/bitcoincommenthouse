@@ -2,6 +2,23 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// BASE58, the original address format, used by addresses that start with
+// "1" (P2PKH) and "3" (P2SH), and by private keys in "WIF" format.
+// It writes bytes as text using 58 symbols. Normal counting uses base 10
+// (digits 0 to 9). Base 58 uses 58 "digits": the numbers 1 to 9 and most
+// upper and lower case letters. The whole address is treated as ONE big
+// number and written in base 58, like converting a number to another base
+// in maths class.
+// "Base58Check" adds a CHECKSUM: the first 4 bytes of a double SHA-256
+// (Hash() in hash.h) of the data are added to the end. If someone mistypes a
+// character, the checksum will (almost certainly) not match, so the address
+// is rejected instead of sending money to the wrong place. Bech32
+// (bech32.cpp) later improved on this, because it can also point out WHERE
+// the mistakes are.
+// The first byte of the data is a "version" prefix that sets the first
+// character: 0 gives "1...", 5 gives "3..." (base58Prefixes in
+// kernel/chainparams.cpp).
 #include <base58.h>
 
 #include <hash.h>
@@ -17,7 +34,12 @@
 using util::ContainsNUL;
 
 /** All alphanumeric characters except for "0", "I", "O", and "l" */
+// COMMENT HOUSE: The 58 symbols, in order: "1" means 0, "2" means 1, and so on.
+// The characters 0 (zero), O (capital o), I (capital i) and l (lower-case L)
+// are left out because they look alike in many fonts.
 static const char* pszBase58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+// COMMENT HOUSE: The reverse table: for each possible character, its value
+// from 0 to 57, or -1 if it is not a base58 symbol.
 static const int8_t mapBase58[256] = {
     -1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,-1,-1,-1,
     -1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,-1,-1,-1,
@@ -37,6 +59,16 @@ static const int8_t mapBase58[256] = {
     -1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,-1,-1,-1,
 };
 
+// COMMENT HOUSE: DecodeBase58(): text to bytes.
+//   1. Each leading "1" stands for one leading zero byte. They are counted
+//      first, because leading zeros would otherwise disappear (just as 007
+//      is the same number as 7).
+//   2. For each character: result = result x 58 + its value. The result is
+//      kept as a list of bytes (base 256), and "carry" passes the overflow
+//      from one byte to the next, exactly like carrying in long
+//      multiplication.
+//   3. Put the leading zero bytes back in front.
+// max_ret_len stops attackers from making this work on huge inputs.
 [[nodiscard]] static bool DecodeBase58(const char* psz, std::vector<unsigned char>& vch, int max_ret_len)
 {
     // Skip leading spaces.
@@ -86,6 +118,10 @@ static const int8_t mapBase58[256] = {
     return true;
 }
 
+// COMMENT HOUSE: EncodeBase58(): bytes to text, the same idea in reverse.
+// Leading zero bytes become leading "1"s. Then for each byte:
+// result = result x 256 + byte, with the result kept in base 58 digits.
+// Finally each digit is replaced by its symbol.
 std::string EncodeBase58(std::span<const unsigned char> input)
 {
     // Skip & count leading zeroes.
@@ -134,6 +170,8 @@ bool DecodeBase58(const std::string& str, std::vector<unsigned char>& vchRet, in
     return DecodeBase58(str.c_str(), vchRet, max_ret_len);
 }
 
+// COMMENT HOUSE: EncodeBase58Check(): add the 4-byte checksum (the first 4
+// bytes of the double SHA-256 of the data) to the end, then encode.
 std::string EncodeBase58Check(std::span<const unsigned char> input)
 {
     // add 4-byte hash check to the end
@@ -143,6 +181,9 @@ std::string EncodeBase58Check(std::span<const unsigned char> input)
     return EncodeBase58(vch);
 }
 
+// COMMENT HOUSE: DecodeBase58Check(): decode, recalculate the checksum of
+// everything except the last 4 bytes, and compare. If they differ, the
+// address has a typo (or was made up), and it is rejected.
 [[nodiscard]] static bool DecodeBase58Check(const char* psz, std::vector<unsigned char>& vchRet, int max_ret_len)
 {
     if (!DecodeBase58(psz, vchRet, max_ret_len > std::numeric_limits<int>::max() - 4 ? std::numeric_limits<int>::max() : max_ret_len + 4) ||
