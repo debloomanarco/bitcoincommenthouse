@@ -2,6 +2,20 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+// COMMENT HOUSE: What is this file?
+// It announces the transaction checks that need CONTEXT: the UTXO set, the
+// block height or the time. The code and full explanations are in
+// consensus/tx_verify.cpp. In short:
+//   - Consensus::CheckTxInputs(): the coins exist, are unspent and mature,
+//     and add up. It also works out the fee.
+//   - GetLegacySigOpCount(), GetP2SHSigOpCount(), GetTransactionSigOpCost():
+//     count signature operations.
+//   - IsFinalTx(): the absolute time lock (nLockTime).
+//   - CalculateSequenceLocks(), EvaluateSequenceLocks(), SequenceLocks():
+//     relative time locks (BIP 68).
+//
+// Header guard: makes sure this file is only read once, even if many other
+// files include it. It ends at the #endif at the bottom.
 #ifndef BITCOIN_CONSENSUS_TX_VERIFY_H
 #define BITCOIN_CONSENSUS_TX_VERIFY_H
 
@@ -26,6 +40,9 @@ namespace Consensus {
  * @param[out] txfee Set to the transaction fee if successful.
  * Preconditions: tx.IsCoinBase() is false.
  */
+// COMMENT HOUSE: [[nodiscard]] makes the compiler complain if a caller ignores
+// the true/false answer. Forgetting to check the result of a consensus
+// check would be a serious bug.
 [[nodiscard]] bool CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee);
 } // namespace Consensus
 
