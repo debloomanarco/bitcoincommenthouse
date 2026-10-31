@@ -172,9 +172,9 @@ public:
     //! Generate a new private key using a cryptographic PRNG.
     // COMMENT HOUSE: MakeNewKey() makes a brand-new private key from strong random
     // numbers. Good randomness is essential: if anyone could guess the number,
-    // they could steal the coins. There are about 2^256 possible keys, more than
-    // the number of atoms in the observable universe, so two people choosing the
-    // same key by chance is practically impossible.
+    // they could steal the coins. There are about 2^256 possible keys (a number
+    // with 78 digits), so two people choosing the same key by chance is
+    // practically impossible.
     void MakeNewKey(bool fCompressed);
 
     /**
