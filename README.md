@@ -195,5 +195,5 @@ Files to deliberately avoid at first
 How I'd keep the work safe and traceable
 
 1. One comment marker everywhere: // COMMENT HOUSE:, so grep finds every annotation and reviewers can tell them apart from developer comments.
-2. Behavior check on every change: git diff should show only added comment lines. and updates from upstream. bitcoin core with added comments
+2. Behavior check on every change: git diff should show only added comment lines. The same goes for updates merged from upstream: the result should always be Bitcoin Core with comments added, and nothing else changed.
 
