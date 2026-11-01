@@ -1,4 +1,4 @@
-IBitcoin Core Comment House
+Bitcoin Core Comment House
 =====================================
 
 https://bitcoincore.org
