@@ -97,7 +97,7 @@ The written documentation, about 200 files. The ones to start with:
 - man/: the manual pages for bitcoind, bitcoin-cli and the other programs.
 
 src/ (the source code)
-This is the code that becomes Bitcoin Core, and it is where all the COMMENT HOUSE notes are. The learning sequence above covers the core files in detail, so this is a map of the rest.
+This is the code that becomes Bitcoin Core, and it is where all the COMMENT HOUSE notes are.
 - The programs: bitcoind.cpp (the node, which runs in the background), bitcoin-cli.cpp (a command-line tool for sending commands to it), bitcoin-qt (the graphical wallet, in qt/), bitcoin-tx.cpp (makes and edits transactions offline), bitcoin-wallet.cpp (offline wallet tool), bitcoin-util.cpp and bitcoin.cpp (a single front door that starts the others).
 - Consensus and data (covered by the learning sequence): consensus/, primitives/, script/, validation.cpp, coins.*, chain.*, pow.*, kernel/chainparams.cpp, undo.h.
 - policy/, txmempool.*, node/miner.cpp: the mempool, policy and block building (Phase 3, Phase 4 and the extra files).
