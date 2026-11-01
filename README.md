@@ -12,7 +12,7 @@ What is Bitcoin Comment House?
 Bitcoin Comment House is an educational project that adds comments to Core so that highschoolers can understand since comments on the main repo are discourage because of clutter.
 
 
-Bitcoin Comment House: Proposed Learning Sequence
+Bitcoin Comment House:
 
 Status: comments have been added to the code. Every file in the eight phases below now has beginner explanations, and so do the extra files listed in "Additional files with comments" further down: 59 files and 614 notes in total. The code itself has not been changed. With the comments taken out, every file is identical to Bitcoin Core.
 
