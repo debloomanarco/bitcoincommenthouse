@@ -9,7 +9,7 @@ https://bitcoincore.org/en/download/.
 What is Bitcoin Comment House?
 ---------------------
 
-Bitcoin Comment House is an educational project that adds comments to Core in a different way directly in the code so some people might be able to more easily understand since comments on the main repo are discourage because of clutter.it is maintained by 1 person including claude at the moment so help is much appreciated from seasoned bitcoin developer if they spot errors in the comments
+Bitcoin Comment House is an educational project that adds comments to Core in a different so some people might be able to more easily understand since comments on the main repo are discourage because of clutter.it is maintained by 1 person including claude at the moment so help is much appreciated from seasoned bitcoin developer if they spot errors in the comments
 
 
 Bitcoin Comment House:
